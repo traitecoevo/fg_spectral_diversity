@@ -6,206 +6,60 @@ library(tidyverse) # dplyr masks raster::extract + raster::select
 library(vegan) # for calculate_sv
 library(geometry) # for calculate_chv
 library(sf)
+source('funx.R')
 
 # combining spectral band images into one tif file  -------------------------------------------------------
 
 # file directory
 mosaics_dir <- "data/2024_mosaics"
 
-# folder list | recursive = won't pick folders within folders
-folders <- list.dirs(mosaics_dir, full.names = FALSE, recursive = FALSE)
-folders <- folders[folders != "point_clouds"]
+# sources function from funx.R
+create_multiband_image(mosaics_dir)
 
-# define order of bands
-desired_band_order <- c("blue", "green", "red", "red_edge", "nir")
+# creating mask for raster using biodivmapR --------------------------------------------------------------
 
-## NOTE: spectral band image tif file names must be named after their band (e.g., blue, nir, etc), 
-#  otherwise change 'desired_band_order' to match file names
-#  should be combined in wavelength order, esp for biodivmapR processes (i.e. as above)
+remotes::install_github('cran/dissUtils')
+remotes::install_github('jbferet/biodivMapR', force = T)
+library(biodivMapR)
+library(terra)
+library(tools)
+library(raster)
+library(stars)
 
+raster_files <- list.files('data_out/combined_rasters', pattern = '_reflectance_combined_image.tif$', full.names = T)
 
-# read in fishnet shapefile from fishnets dir, only want geometry col
-subplots <- read_sf('data/fishnets/cons_fishnet.shp') %>%
-  select('geometry')
+envi_dir <- 'C:/Users/adele/Documents/fg_spectral_diversity/ENVI/'
 
-# apply subplot ids
-subplots$subplot_id <- unlist(lapply(1:5, function(i) paste(i, 1:5, sep="_")))
+mask_dir <- 'C:/Users/adele/Documents/fg_spectral_diversity/biodivmapR/RESULTS/'
 
-# loop thru each folder 
-for (folder in folders) {
-  # create path
-  folder_path <- file.path(mosaics_dir, folder)
-  
-  # list of tif files | \\. represents . (dots need to be escaped w \, \ need to be escaped with  \). $means at end of file name/string
-  tif_files <- list.files(folder_path, pattern = "\\.tif$", full.names = TRUE)
-  
-  # load as raster
-  rasters <- lapply(tif_files, raster)
-  
-  # extract band names from file names
-  band_names <- tools::file_path_sans_ext(basename(tif_files))
-  
-  # stack rasters and assign band names
-  combined_image <- stack(rasters)
-  names(combined_image) <- band_names
-  
-  # reorder the bands based on the desired band order
-  combined_image <- combined_image[[match(desired_band_order, band_names)]]
-  
-  # create output file
-  output_filename <- file.path("data_out/combined_rasters", paste0(folder, "_combined_image.tif"))
-  writeRaster(combined_image, filename = output_filename, format = "GTiff", options="INTERLEAVE=BAND", overwrite = TRUE)
-  
-  plot(combined_image)
-}
+masked_raster_dir <- 'C:/Users/adele/Documents/fg_spectral_diversity/data_out/combined_rasters/masked/'
+
+# function sourced from funx.R 
+create_masked_raster(raster_files, envi_dir, mask_dir, masked_raster_dir)
 
 # extract pixel values for all rasters by subplot  ------------------------------------------------------
 
-raster_files <- list.files('data_out/combined_rasters', pattern = '_reflectance_combined_image.tif$', full.names = T)
-subplot_files <- list.files('data/fishnets', pattern = '_fishnet.shp$', full.names = T)
+subplot_files <- list.files('data/fishnets', pattern = '_fishnet.shp$', full.names = TRUE)
 
-all_pixel_values_list <- list()
+# FOR MASKED IMAGES
+raster_files_masked <- list.files('data_out/combined_rasters/masked', pattern = '_reflectance_combined_image_masked.tif$', full.names = TRUE)
 
-for (raster_file in raster_files) {
-  
-  # identify the string that represents the site name
-  identifier <- str_extract(basename(raster_file), "^[^_]+")
-  
-  #choose the corresponding subplot file
-  subplot_file <- subplot_files[grep(paste0('^', identifier), basename(subplot_files))]
+masked_pixel_values_list <- extract_pixels_values(raster_files_masked, subplot_files)
+masked_pixel_values <- bind_rows(masked_pixel_values_list, .id = 'identifier')
 
-  # read in subplot file and select geometries
-  subplots <- read_sf(subplot_file) %>% 
-    select('geometry')
-  
-  # apply subplot ids
-  subplots$subplot_id <- unlist(lapply(1:5, function(i) paste(i, 1:5, sep="_")))
-  
-  # read in raster file
-  raster_data <- stack(raster_file)
-  
-  # apply names - should be saved in wavelength order as per sect 1 of this script
-  names(raster_data) <- c('blue', 'green', 'red', 'red_edge', 'nir')
-  
-  # create empty list
-  pixel_values_list <- list()
-  
-  for (i in 1:nrow(subplots)){
-    
-    # select the i-th subplot and its id
-    subplot <- subplots[i, ]
-    subplot_id <- subplot$subplot_id
-    
-    # convert to spatial object
-    subplot_sp <- as(subplot, "Spatial")
-    
-    # crop and mask raster using current subplot 
-    cropped_raster <- crop(raster_data, subplot_sp)
-    masked_raster <- mask(cropped_raster, subplot_sp)
-    
-    # extract pixel values
-    pixel_values  <- as.data.frame(getValues(masked_raster))
-    
-    # add subplot id to pixel values df
-    pixel_values$subplot_id <- subplot_id
-    
-    #add to list
-    pixel_values_list[[i]] <- pixel_values
-    
-  }
-  # combined all pixel values into one df for current raster
-  all_pixel_values <- bind_rows(pixel_values_list) %>%
-    na.omit()
-  
-  # add to overall list with all raster data pixel values 
-  all_pixel_values_list[[identifier]] <- all_pixel_values
+# FOR UNMASKED IMAGES
+raster_files_unmasked <- list.files('data_out/combined_rasters', pattern = '_reflectance_combined_image.tif$', full.names = TRUE)
 
-  }
+unmasked_pixel_values_list <- extract_pixels_values(raster_files_unmasked, subplot_files)
+unmasked_pixel_values <- bind_rows(final_pixel_values_list, .id = 'identifier')
 
-final_pixel_values <- bind_rows(all_pixel_values_list, .id = 'identifier')
 
 # apply spectral metrics to pixel value df --------------------------------
 
-## CV, CHV, SV metric functions appropriated from https://github.com/ALCrofts/CABO_SVH_Forest_Sites/tree/v1.0
-# cv function
-calculate_cv <- function(pixel_values_df, subplots, wavelengths) {
-  cv <- pixel_values_df %>%
-    select(c({{subplots}}, {{wavelengths}})) %>%
-    group_by({{subplots}}) %>%
-    summarise_all(~sd(.)/abs(mean(.))) %>%
-    rowwise({{subplots}}) %>%
-    summarise(CV = sum(c_across(cols = everything()), na.rm = T) / (ncol(.) - sum(is.na(c_across(everything())))))
-  
-  return(cv)
-}
+masked_metrics <- calculate_metrics(masked_pixel_values, masked = TRUE)
+unmasked_metrics <- calculate_metrics(unmasked_pixel_values, masked = FALSE)
 
-# sv function
-calculate_sv <- function(pixel_values_df, subplots, wavelengths) {
-  spectral_points <- pixel_values_df %>%
-    group_by({{subplots}}) %>%
-    summarise(points = n())
-  
-  sv <- pixel_values_df %>%
-    select(c({{wavelengths}}, {{subplots}})) %>%
-    group_by({{subplots}}) %>%
-    summarise_all(~sum((.x - mean(.x))^2)) %>%
-    rowwise({{subplots}}) %>%
-    summarise(SS = sum(c_across(cols = everything()))) %>%
-    left_join(spectral_points) %>%
-    summarise(SV = SS / (points - 1))
-  
-  return(sv)
-}
-
-# chv function
-calculate_chv <- function(pixel_values_df, subplots, wavelengths) {
-  subplot_of_interest <- deparse(substitute(subplots))
-  
-  PCA <- pixel_values_df %>%
-    select(c({{wavelengths}})) %>%
-    rda(scale = F)
-  
-  CHV <- data.frame(PCA$CA$u) %>%
-    select(c(1:3)) %>%
-    cbind({{pixel_values_df}}) %>%
-    select(c('PC1', 'PC2', 'PC3', {{subplots}})) %>%
-    group_split({{subplots}}) %>%
-    set_names(map(., ~unique(.[[subplot_of_interest]]))) %>%
-    map(~convhulln(.x[-4], option = 'FA')) %>%
-    map_dbl('vol') %>%
-    as.data.frame() %>%
-    rownames_to_column('subplot_id') %>%
-    rename(CHV = '.')
-  
-  rm(subplot_of_interest) 
-  
-  return(CHV)
-}
-
-# create empty list to store results
-results <- list()
-
-# loop through each site (represented as 'identifier' from file name)
-for (identifier in unique(final_pixel_values$identifier)) {
-  
-  # !! --> gets the values of current identifier ('unquotes' it)
-  site_pixel_values <- final_pixel_values %>% filter(identifier == !!identifier)
-  
-  cv <- calculate_cv(site_pixel_values, subplot_id, c('blue', 'green', 'red', 'red_edge', 'nir'))
-  sv <- calculate_sv(site_pixel_values, subplot_id, c('blue', 'green', 'red', 'red_edge', 'nir'))
-  chv <- calculate_chv(site_pixel_values, subplot_id, c('blue', 'green', 'red', 'red_edge', 'nir'))
-  
-  results[[identifier]] <- list(CV = cv, SV = sv, CHV = chv)
-}
-
-# combine into dfs
-combined_cv <- bind_rows(lapply(results, function(x) x$CV), .id = 'identifier')
-combined_sv <- bind_rows(lapply(results, function(x) x$SV), .id = 'identifier')
-combined_chv <- bind_rows(lapply(results, function(x) x$CHV), .id = 'identifier')
-
-combined_metrics <- combined_cv %>%
-  left_join(combined_sv, by = c("identifier", "subplot_id")) %>%
-  left_join(combined_chv, by = c("identifier", "subplot_id"))
+metrics <- bind_rows(unmasked_metrics, masked_metrics) 
 
 # field observations for every plot ---------------------------------------
 
@@ -333,7 +187,7 @@ for (site in unique_sites) {
   # store the community matrix in the list - this is a temp step to check!!!
   community_matrices[[site]] <- community_matrix
   
-   #Remove unwanted column if it exists -- WHY DOES THIS COLUMN EXIST~!!!!>???>
+  # remove unwanted column if it exists -- WHY DOES THIS COLUMN EXIST~!!!!>???>
   if ("V1" %in% colnames(community_matrix)) {
     community_matrix <- community_matrix %>% 
       dplyr::select(-V1)
@@ -365,6 +219,8 @@ final_results <- final_results %>%
                        "NSABHC011" = "sandstone",
                        "NSABHC012" = "cons"))
 
+
+# sanity check one of these 
 head(final_results)
 
 
@@ -374,10 +230,10 @@ head(final_results)
 
 # combined field and spectral metrics -------------------------------------
 
-combined_diversity_values <- left_join(final_results, combined_metrics, by = c('identifier', 'subplot_id'))
+tax_and_spec_diversity_values <- left_join(final_results, metrics, by = c('identifier', 'subplot_id'))
 
 # pivot longer 
-long_data <- combined_diversity_values %>%
+tax_spec_div_long <- tax_and_spec_diversity_values %>%
   pivot_longer(cols = c(species_richness, shannon_diversity, simpson_diversity),
                names_to = "taxonomic_metric",
                values_to = "taxonomic_value") %>%
@@ -386,10 +242,10 @@ long_data <- combined_diversity_values %>%
                values_to = "spectral_value")
 
 
-# plot, showing spectral ~ taxonomic relos
-ggplot(long_data, aes(x = spectral_value, y = taxonomic_value)) +
+# plot, showing spectral ~ taxonomic relos. add , color = masked and unmasked
+ggplot(tax_spec_div_long, aes(x = spectral_value, y = taxonomic_value, color = image_type)) +
   geom_point() +
-  geom_smooth(method = "lm", se = FALSE) +
+  geom_smooth(method = "lm", se = FALSE, size = 1.5, linetype = "solid", aes(fill = image_type), color = "black") +
   facet_grid(taxonomic_metric ~ spectral_metric, scales = "free") +
   labs(
     title = "comparison of taxonomic + spectral diversity metrics ",
@@ -397,18 +253,3 @@ ggplot(long_data, aes(x = spectral_value, y = taxonomic_value)) +
     y = "taxonomic diversity value") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
-
-# now plot seperating plot location (emgrazed removed as don't have this raster yet lol oops)
-long_data %>%
-  filter(identifier != 'emgrazed') %>% 
-  ggplot(aes(x = spectral_value, y = taxonomic_value)) +
-  geom_point() +
-  geom_smooth(method = 'lm', se = FALSE) +
-  facet_grid(taxonomic_metric ~ spectral_metric + identifier, scales = "free") +
-  labs(
-    title = "comparison of taxonomic + spectral diversity metrics by site",
-    x = "spectral diversity value",
-    y = "taxonomic diversity value") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1))
-

@@ -8,13 +8,20 @@ library(geometry) # for calculate_chv
 library(sf)
 source('funx.R')
 
+setwd("C:/Users/adele/Documents/fg_spectral_diversity")
+
 # combining spectral band images into one tif file  -------------------------------------------------------
 
+## folders in mosaics_dir should be carry AUSPLOT plot_id (e.g. NSABHC0009)
 # file directory
-mosaics_dir <- "data/2024_mosaics"
+sixteen_dir <- "data/2016_mosaics"
 
-# sources function from funx.R
-create_multiband_image(mosaics_dir)
+twentyfour_dir <- 'data/2024_mosaics'
+
+create_multiband_image(sixteen_dir, c("green", "red", "red_edge", "nir"))
+
+create_multiband_image(twentyfour_dir, c("blue", "green", "red", "red_edge", "nir"))
+
 
 # creating mask for raster using biodivmapR --------------------------------------------------------------
 
@@ -26,215 +33,179 @@ library(tools)
 library(raster)
 library(stars)
 
-raster_files <- list.files('data_out/combined_rasters', pattern = '_reflectance_combined_image.tif$', full.names = T)
-
-envi_dir <- 'C:/Users/adele/Documents/fg_spectral_diversity/ENVI/'
+envi_dir <- 'data_out/combined_rasters'
 
 mask_dir <- 'C:/Users/adele/Documents/fg_spectral_diversity/biodivmapR/RESULTS/'
 
 masked_raster_dir <- 'C:/Users/adele/Documents/fg_spectral_diversity/data_out/combined_rasters/masked/'
 
-# function sourced from funx.R 
-create_masked_raster(raster_files, envi_dir, mask_dir, masked_raster_dir)
+
+create_masked_raster(envi_dir, mask_dir, masked_raster_dir, '2024',
+                     c("blue", "green", "red", "red_edge", "nir"), c(450,560,650,730,840),
+                     NDVI_Thresh = 0.05, NIR_Thresh = 0.02,
+                     Blue = 450, Red = 650, NIR = 840)
+
+
+# 2016 raster
+create_masked_raster(envi_dir, mask_dir, masked_raster_dir, '2016',
+                     c("green", "red", "red_edge", "nir"), c(550,660,735,790),
+                     NDVI_Thresh = 0.02, NIR_Thresh = 0.02,
+                     Blue = 450, Red = 660, NIR = 790)
+
 
 # extract pixel values for all rasters by subplot  ------------------------------------------------------
 
 subplot_files <- list.files('data/fishnets', pattern = '_fishnet.shp$', full.names = TRUE)
 
 # FOR MASKED IMAGES
-raster_files_masked <- list.files('data_out/combined_rasters/masked', pattern = '_reflectance_combined_image_masked.tif$', full.names = TRUE)
+raster_files_masked_16 <- list.files('data_out/combined_rasters/masked/2016', pattern = '_combined_image_masked.tif$', full.names = TRUE)
 
-masked_pixel_values_list <- extract_pixels_values(raster_files_masked, subplot_files)
-masked_pixel_values <- bind_rows(masked_pixel_values_list, .id = 'identifier')
+masked_pixel_values_list_16 <- extract_pixels_values(raster_files_masked_16, subplot_files, c('green', 'red', 'red_edge', 'nir'))
+masked_pixel_values_16 <- bind_rows(masked_pixel_values_list_16, .id = 'identifier')
+
+raster_files_masked_24 <- list.files('data_out/combined_rasters/masked/2024', pattern = '_combined_image_masked.tif$', full.names = TRUE)
+
+masked_pixel_values_list_24 <- extract_pixels_values(raster_files_masked_24, subplot_files, c('blue', 'green', 'red', 'red_edge', 'nir'))
+masked_pixel_values_24 <- bind_rows(masked_pixel_values_list_24, .id = 'identifier')
 
 # FOR UNMASKED IMAGES
-raster_files_unmasked <- list.files('data_out/combined_rasters', pattern = '_reflectance_combined_image.tif$', full.names = TRUE)
+raster_files_unmasked_16 <- list.files('data_out/combined_rasters/2016', pattern = '_combined_image.tif$', full.names = TRUE)
 
-unmasked_pixel_values_list <- extract_pixels_values(raster_files_unmasked, subplot_files)
-unmasked_pixel_values <- bind_rows(final_pixel_values_list, .id = 'identifier')
+unmasked_pixel_values_list_16 <- extract_pixels_values(raster_files_unmasked_16, subplot_files, c('green', 'red', 'red_edge', 'nir'))
+unmasked_pixel_values_16 <- bind_rows(unmasked_pixel_values_list_16, .id = 'identifier')
 
+raster_files_unmasked_24 <- list.files('data_out/combined_rasters/2024', pattern = '_combined_image.tif$', full.names = TRUE)
+
+unmasked_pixel_values_list_24 <- extract_pixels_values(raster_files_unmasked_24, subplot_files, c('blue', 'green', 'red', 'red_edge', 'nir'))
+unmasked_pixel_values_24 <- bind_rows(unmasked_pixel_values_list_24, .id = 'identifier')
+head(unmasked_pixel_values_24)
 
 # apply spectral metrics to pixel value df --------------------------------
 
-masked_metrics <- calculate_metrics(masked_pixel_values, masked = TRUE)
-unmasked_metrics <- calculate_metrics(unmasked_pixel_values, masked = FALSE)
+source('funx.R')
 
-metrics <- bind_rows(unmasked_metrics, masked_metrics) 
+masked_metrics_24 <- calculate_metrics(masked_pixel_values_24, masked = TRUE, c('blue', 'green', 'red', 'red_edge', 'nir'))
+unmasked_metrics_24 <- calculate_metrics(unmasked_pixel_values_24, masked = FALSE, c('blue', 'green', 'red', 'red_edge', 'nir'))
+
+metrics_24 <- bind_rows(unmasked_metrics_24, masked_metrics_24)
+
+masked_metrics_16 <- calculate_metrics(masked_pixel_values_16, masked = TRUE, c('green', 'red', 'red_edge', 'nir'))
+unmasked_metrics_16 <- calculate_metrics(unmasked_pixel_values_16, masked = FALSE, c('green', 'red', 'red_edge', 'nir'))
+
+metrics_16 <- bind_rows(unmasked_metrics_16, masked_metrics_16)
+
+#write.csv(metrics_24, 'data_out/2024_spec_div_values.csv')
+#write.csv(metrics_16, 'data_out/2016_spec_div_values.csv')
+
+metrics_24 <- read_csv('data_out/2024_spec_div_values.csv')
 
 # field observations for every plot ---------------------------------------
+library(devtools)
+install_github("ternaustralia/ausplotsR", build_vignettes = TRUE, dependencies = TRUE)
+library(ausplotsR)
 
 # read survey data
-survey_data <- read.csv('data/ausplots_march_24.csv')
+twentyfour_survey_data <- read.csv('data/ausplots_march_24.csv')
 
-# get unique site names
-unique_sites <- unique(survey_data$site_unique) 
-unique_sites <- unique_sites[unique_sites != ""]
+OR
 
-# list to store results for all lists
-all_site_results <- list()
+# for 2016 data
 
-# list to store community matrices- this is a temporary step, to check that community matrices are correct :)
-community_matrices <- list()
+plots_oi <- c('NSABHC0009', 'NSABHC0010', 'NSABHC0011', 'NSABHC0012')
 
-# Loop through each unique site
-for (site in unique_sites) {
-  # Filter data for the current site
-  site_survey_data <- survey_data %>%
-    filter(site_unique == site)
-  
-  # Extract only direction of the transect (no numbers)
-  site_survey_data$transect_direction <- gsub('[[:digit:]]+', '', site_survey_data$transect)
-  
-  # Extract only number of the transect (no direction)
-  site_survey_data$transect_number <- as.numeric(gsub(".*?([0-9]+).*", "\\1", site_survey_data$transect))
-  
-  # Create variable for fixed transect direction (to order them all transects in the same direction)
-  site_survey_data$transect_direction2 <- NA 
-  
-  # Create variable for fixed point number (inverse in some cases as if they had been collected in the same direction)
-  site_survey_data$point_number2 <- NA 
-  
-  # Create XY empty variables for plot XY coordinates
-  site_survey_data$X_plot <- NA 
-  site_survey_data$Y_plot <- NA
-  
-  # For loop to homogenize transects and numbers. It converts all W-E to E-W and all N-S to S-N 
-  for (i in 1:nrow(site_survey_data)){
-    if (site_survey_data[i, "transect_direction"] == "W-E") {
-      site_survey_data[i, "point_number2"] <- 100 - site_survey_data[i, "point_number"] # If transect E-W, transect fixed is W-E and inverse numbers
-      site_survey_data[i, "transect_direction2"] <- "E-W"
-    }
-    if (site_survey_data[i, "transect_direction"] == "E-W") {
-      site_survey_data[i, "point_number2"] <- site_survey_data[i, "point_number"] # If transect W-E, all stays the same
-      site_survey_data[i, "transect_direction2"] <- "E-W"
-    }
-    if (site_survey_data[i, "transect_direction"] == "S-N") {
-      site_survey_data[i, "point_number2"] <- site_survey_data[i, "point_number"] # If transect N-S, all stays the same
-      site_survey_data[i, "transect_direction2"] <- "S-N"
-    }
-    if (site_survey_data[i, "transect_direction"] == "N-S") {
-      site_survey_data[i, "point_number2"] <- 100 - site_survey_data[i, "point_number"] # If transect S-N, transect fixed is N-S and inverse numbers
-      site_survey_data[i, "transect_direction2"] <- "S-N"
-    }
-  }
-  
-  # For loop to assign plotXY coordinates to each point intercept
-  for (i in 1:nrow(site_survey_data)){
-    if (site_survey_data[i, "transect_direction2"] == "E-W") {
-      if (site_survey_data[i, "transect_number"] == 1){
-        site_survey_data[i, "Y_plot"] <- 10
-        site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-      }
-      if (site_survey_data[i, "transect_number"] == 2){
-        site_survey_data[i, "Y_plot"] <- 30
-        site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-      }
-      if (site_survey_data[i, "transect_number"] == 3){
-        site_survey_data[i, "Y_plot"] <- 50
-        site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-      }
-      if (site_survey_data[i, "transect_number"] == 4){
-        site_survey_data[i, "Y_plot"] <- 70
-        site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-      }
-      if (site_survey_data[i, "transect_number"] == 5){
-        site_survey_data[i, "Y_plot"] <- 90
-        site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-      }
-    }
-    if (site_survey_data[i, "transect_direction2"] == "S-N") {
-      if (site_survey_data[i, "transect_number"] == 1){
-        site_survey_data[i, "X_plot"] <- 10
-        site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-      }
-      if (site_survey_data[i, "transect_number"] == 2){
-        site_survey_data[i, "X_plot"] <- 30
-        site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-      }
-      if (site_survey_data[i, "transect_number"] == 3){
-        site_survey_data[i, "X_plot"] <- 50
-        site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-      }
-      if (site_survey_data[i, "transect_number"] == 4){
-        site_survey_data[i, "X_plot"] <- 70
-        site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-      }
-      if (site_survey_data[i, "transect_number"] == 5){
-        site_survey_data[i, "X_plot"] <- 90
-        site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-      }
-    }
-  }
-  
-  # subplot rows and columns - +1 ensures 0 point values fall into correct subplot, 
-  # pmin ensures 100 point values falls in correct subplot given +1
-  site_survey_data$subplot_row <- pmin(ceiling((site_survey_data$Y_plot + 1) / 20), 5)
-  site_survey_data$subplot_col <- pmin(ceiling((site_survey_data$X_plot + 1) / 20), 5)
-  
-  # single ID for subplot row and column
-  site_survey_data$subplot_id <- paste(site_survey_data$subplot_row, site_survey_data$subplot_col, sep = "_")
-  
-  subplot_diversity <- site_survey_data %>%
-    drop_na(standardised_name) %>%
-    group_by(subplot_id) %>%
-    summarise(species_richness = n_distinct(standardised_name))
-  
-  community_matrix <- site_survey_data %>%
-    drop_na(standardised_name) %>%
-    count(subplot_id, standardised_name) %>%
-    spread(standardised_name, n, fill = 0)
-  
-  # store the community matrix in the list - this is a temp step to check!!!
-  community_matrices[[site]] <- community_matrix
-  
-  # remove unwanted column if it exists -- WHY DOES THIS COLUMN EXIST~!!!!>???>
-  if ("V1" %in% colnames(community_matrix)) {
-    community_matrix <- community_matrix %>% 
-      dplyr::select(-V1)
-  }
-  
-  # calculate diversity indices
-  shannon_diversity <- diversity(community_matrix[, -1], index = "shannon")
-  simpson_diversity <- diversity(community_matrix[, -1], index = "simpson")
-  
-  subplot_diversity <- subplot_diversity %>%
-    mutate(shannon_diversity = shannon_diversity,
-      simpson_diversity = simpson_diversity,
-      site = site)
-  
-  # store  result for  current site
-  all_site_results[[site]] <- subplot_diversity
-}
+veg <- get_ausplots(plots_oi, veg.vouchers = T, veg.PI = T)
 
-# combine into one df
-final_results <- bind_rows(all_site_results, .id = "site")
+sixteen_survey_data <- veg$veg.PI %>%
+  left_join(veg$site.info %>% select(site_unique, visit_start_date), by = "site_unique") %>%
+  filter(substr(visit_start_date, 1, 4) == '2016')
 
-# add identifier based on site name so that this can be joined with spectral results 
-# in refactor two you could remove this step by just calling the sites by their ausplot name...
-# would require changing the file names of OG rasters
-final_results <- final_results %>%
-  mutate(identifier = recode(site,
-                       "NSABHC009" = "emu",
-                       "NSABHC010" = "emgrazed",
-                       "NSABHC011" = "sandstone",
-                       "NSABHC012" = "cons"))
+twentyfour_field_diversity <- calculate_field_diversity(twentyfour_survey_data)
 
+sixteen_field_diversity <- calculate_field_diversity(sixteen_survey_data)
 
 # sanity check one of these 
 head(final_results)
+
 
 
 # erghhhhhhhhhhhhhhhhhhhh ... need to still clean up the survey data and think about stuff like... 
 # dead shrub stuff, things IDd to genus level etc etc....
 #community_matrices[["NSABHC012"]] |> View()
 
+
 # combined field and spectral metrics -------------------------------------
 
-tax_and_spec_diversity_values <- left_join(final_results, metrics, by = c('identifier', 'subplot_id'))
+library(gridExtra)
+
+tax_and_spec_diversity_values_24 <- left_join(twentyfour_field_diversity, metrics_24, by = c('site' = 'identifier', 'subplot_id'))
+tax_and_spec_diversity_values_16 <- left_join(sixteen_field_diversity, metrics_16, by = c('site' = 'identifier', 'subplot_id'))
+
+OR
+#tax_and_spec_diversity_values_24 <- read_csv("data_out/tax_and_spec_div_values_24.csv")
+#tax_and_spec_diversity_values_16 <- read_csv('data_out/tax_and_spec_div_values_16.csv')
 
 # pivot longer 
-tax_spec_div_long <- tax_and_spec_diversity_values %>%
-  pivot_longer(cols = c(species_richness, shannon_diversity, simpson_diversity),
+tax_spec_div_long <- tax_and_spec_diversity_values_24 %>%
+  pivot_longer(cols = c(species_richness, shannon_diversity, simpson_diversity, pielou_evenness),
+               names_to = "taxonomic_metric",
+               values_to = "taxonomic_value") %>%
+  pivot_longer(cols = c(CV, SV, CHV),
+               names_to = "spectral_metric",
+               values_to = "spectral_value")
+
+taxonomic_labels <- c(
+  species_richness = "Species\nRichness",
+  shannon_diversity = "Shannon\nDiversity",
+  simpson_diversity = "Simpson\nDiversity",
+  pielou_evenness = "Pielou's\nEvenness"
+)
+# plot, showing spectral ~ taxonomic relos. add , color = masked and unmasked
+unmasked_24_plot <- tax_spec_div_long %>%
+  filter(image_type == 'unmasked') %>%
+ggplot(aes(x = spectral_value, y = taxonomic_value, color = site)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "solid", color = 'red') +
+  facet_grid(taxonomic_metric ~ spectral_metric, scales = "free", labeller = labeller(taxonomic_metric = taxonomic_labels)) +
+  labs(
+    title = "unmasked 2024",
+    x = "spectral diversity value",
+    y = "taxonomic diversity value") +
+  theme_minimal() +
+  scale_color_manual(values = c('lightpink1', 'violet', 'skyblue1', 'springgreen3')) +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        strip.text.y = element_text(angle = 0, hjust = 1),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) 
+
+masked_24_plot <- tax_spec_div_long %>%
+  filter(image_type == 'masked') %>%
+  ggplot(aes(x = spectral_value, y = taxonomic_value, color = site)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "solid", color = 'red') +
+  facet_grid(taxonomic_metric ~ spectral_metric, scales = "free", labeller = labeller(taxonomic_metric = taxonomic_labels)) +
+  labs(
+    title = "masked 2024",
+    x = "spectral diversity value",
+    y = "taxonomic diversity value") +
+  theme_minimal() +
+  scale_color_manual(values = c('lightpink1', 'violet', 'skyblue1', 'springgreen3')) +
+  
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        strip.text.y = element_text(angle = 0, hjust = 1),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) 
+
+
+grid.arrange(unmasked_24_plot, masked_24_plot, ncol = 2)
+
+
+# for 2016
+
+# pivot longer 
+tax_spec_div_long_16 <- tax_and_spec_diversity_values_16 %>%
+  pivot_longer(cols = c(species_richness, shannon_diversity, simpson_diversity, pielou_evenness),
                names_to = "taxonomic_metric",
                values_to = "taxonomic_value") %>%
   pivot_longer(cols = c(CV, SV, CHV),
@@ -242,14 +213,43 @@ tax_spec_div_long <- tax_and_spec_diversity_values %>%
                values_to = "spectral_value")
 
 
-# plot, showing spectral ~ taxonomic relos. add , color = masked and unmasked
-ggplot(tax_spec_div_long, aes(x = spectral_value, y = taxonomic_value, color = image_type)) +
+masked_16_plot <- tax_spec_div_long_16 %>%
+  filter(image_type == 'masked') %>%
+  ggplot(aes(x = spectral_value, y = taxonomic_value, color = site)) +
   geom_point() +
-  geom_smooth(method = "lm", se = FALSE, size = 1.5, linetype = "solid", aes(fill = image_type), color = "black") +
-  facet_grid(taxonomic_metric ~ spectral_metric, scales = "free") +
+  geom_smooth(method = "lm", se = FALSE, linetype = "solid", color = 'red') +
+  facet_grid(taxonomic_metric ~ spectral_metric, scales = "free", labeller = labeller(taxonomic_metric = taxonomic_labels)) +
   labs(
-    title = "comparison of taxonomic + spectral diversity metrics ",
+    title = "masked 2016",
     x = "spectral diversity value",
     y = "taxonomic diversity value") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  scale_color_manual(values = c('lightpink1', 'springgreen3')) +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        strip.text.y = element_text(angle = 0, hjust = 1),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) 
+
+unmasked_16_plot <- tax_spec_div_long_16 %>%
+  filter(image_type == 'unmasked') %>%
+  ggplot(aes(x = spectral_value, y = taxonomic_value, color = site)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, linetype = "solid", color = 'red') +
+  facet_grid(taxonomic_metric ~ spectral_metric, scales = "free", labeller = labeller(taxonomic_metric = taxonomic_labels)) +
+  labs(
+    title = "unmasked 2016",
+    x = "spectral diversity value",
+    y = "taxonomic diversity value") +
+  theme_minimal() +
+  scale_color_manual(values = c('lightpink1', 'springgreen3')) +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        strip.text.y = element_text(angle = 0, hjust = 1),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) 
+
+
+combined_plot <- grid.arrange(unmasked_24_plot, masked_24_plot, unmasked_16_plot, masked_16_plot, ncol = 2)
+
+

@@ -3,7 +3,7 @@
 # load packages -----------------------------------------------------------
 library(raster)
 library(tidyverse) # dplyr masks raster::extract + raster::select
-library(vegan) # for calculate_sv
+library(vegan) # for calculate_sv and chv
 library(geometry) # for calculate_chv
 library(sf)
 source('funx.R')
@@ -23,34 +23,53 @@ create_multiband_image(sixteen_dir, c("green", "red", "red_edge", "nir"))
 create_multiband_image(twentyfour_dir, c("blue", "green", "red", "red_edge", "nir"))
 
 
-# creating mask for raster using biodivmapR --------------------------------------------------------------
+# calculating optimum thresholds for masking ------------------------------
+## 2024
+# ndvi 
+ndvi_values_24 <- read_csv("data/ndvi_2024_values.csv")
 
-remotes::install_github('cran/dissUtils')
-remotes::install_github('jbferet/biodivMapR', force = T)
-library(biodivMapR)
-library(terra)
+ndvi_threshold_df_24 <- find_optimum_thresholds(ndvi_values_24, class = 'class', value = 'ndvi', site = 'location', class_value = 'veg')
+
+# nir
+nir_values_24 <- read_csv("data/nir_less_05_table.csv")
+
+nir_threshold_df_24 <- find_optimum_thresholds(nir_values_24, class = 'class', value = 'nir', class_value = 'shadow', site = 'location')
+
+# havent done random points for emu grazed, 0.045 looks about right haha
+nir_threshold_df_24 <- rbind(nir_threshold_df_24, data.frame(site = "NSABHC0010", threshold = 0.045))
+
+# 2016 
+# ndvi
+ndvi_values_16 <- read_csv("data/ndvi_2016_values.csv")
+
+ndvi_threshold_df_16 <- find_optimum_thresholds(ndvi_values_16, class = 'class', value = 'ndvi', site = 'site')
+
+# NIR - havent done random points arbitrarily chosen these values (for now)
+nir_threshold_df_16 <- data.frame(
+  site = c("NSABHC0009", "NSABHC0012"),
+  threshold = c(0.15, 0.20))
+
+# creating mask for raster --------------------------------------------------------------
+
 library(tools)
-library(raster)
-library(stars)
 
-envi_dir <- 'data_out/combined_rasters'
+# create 2024 masked rasters
+create_masked_raster(input = 'data_out/combined_rasters/2024',
+                     output_dir = 'data_out/combined_rasters/masked/2024',
+                     band_wavelengths = c(450,560,650,730,840),
+                     NDVI_Thresh_df = ndvi_threshold_df_24,
+                     NIR_Thresh_df = nir_threshold_df_24,
+                     Red_band = 650,
+                     NIR_band = 840)  
 
-mask_dir <- 'C:/Users/adele/Documents/fg_spectral_diversity/biodivmapR/RESULTS/'
-
-masked_raster_dir <- 'C:/Users/adele/Documents/fg_spectral_diversity/data_out/combined_rasters/masked/'
-
-
-create_masked_raster(envi_dir, mask_dir, masked_raster_dir, '2024',
-                     c("blue", "green", "red", "red_edge", "nir"), c(450,560,650,730,840),
-                     NDVI_Thresh = 0.05, NIR_Thresh = 0.02,
-                     Blue = 450, Red = 650, NIR = 840)
-
-
-# 2016 raster
-create_masked_raster(envi_dir, mask_dir, masked_raster_dir, '2016',
-                     c("green", "red", "red_edge", "nir"), c(550,660,735,790),
-                     NDVI_Thresh = 0.02, NIR_Thresh = 0.02,
-                     Blue = 450, Red = 660, NIR = 790)
+# create 2016 masked rasters
+create_masked_raster(input = 'data_out/combined_rasters/2016',
+                     output_dir = 'data_out/combined_rasters/masked/2016',
+                     band_wavelengths = c(550,660,735,790),
+                     NDVI_Thresh_df = ndvi_threshold_df_16,
+                     NIR_Thresh_df = nir_threshold_df_16,
+                     Red_band = 660,
+                     NIR_band = 790)  
 
 
 # extract pixel values for all rasters by subplot  ------------------------------------------------------
@@ -78,26 +97,33 @@ raster_files_unmasked_24 <- list.files('data_out/combined_rasters/2024', pattern
 
 unmasked_pixel_values_list_24 <- extract_pixels_values(raster_files_unmasked_24, subplot_files, c('blue', 'green', 'red', 'red_edge', 'nir'))
 unmasked_pixel_values_24 <- bind_rows(unmasked_pixel_values_list_24, .id = 'identifier')
-head(unmasked_pixel_values_24)
 
 # apply spectral metrics to pixel value df --------------------------------
-
 source('funx.R')
+library(tictoc)
 
+tic()
 masked_metrics_24 <- calculate_metrics(masked_pixel_values_24, masked = TRUE, c('blue', 'green', 'red', 'red_edge', 'nir'))
+toc()
+
 unmasked_metrics_24 <- calculate_metrics(unmasked_pixel_values_24, masked = FALSE, c('blue', 'green', 'red', 'red_edge', 'nir'))
 
 metrics_24 <- bind_rows(unmasked_metrics_24, masked_metrics_24)
 
+tic()
 masked_metrics_16 <- calculate_metrics(masked_pixel_values_16, masked = TRUE, c('green', 'red', 'red_edge', 'nir'))
+toc()
+
+tic()
 unmasked_metrics_16 <- calculate_metrics(unmasked_pixel_values_16, masked = FALSE, c('green', 'red', 'red_edge', 'nir'))
+toc()
 
 metrics_16 <- bind_rows(unmasked_metrics_16, masked_metrics_16)
 
-#write.csv(metrics_24, 'data_out/2024_spec_div_values.csv')
-#write.csv(metrics_16, 'data_out/2016_spec_div_values.csv')
-
-metrics_24 <- read_csv('data_out/2024_spec_div_values.csv')
+write.csv(masked_metrics_24, 'data_out/2024_masked_spec_div_values.csv')
+write.csv(metrics_16, 'data_out/2016_spec_div_values.csv')
+ 
+#metrics_24 <- read_csv('data_out/2024_spec_div_values.csv')
 
 # field observations for every plot ---------------------------------------
 library(devtools)
@@ -137,8 +163,11 @@ head(final_results)
 
 library(gridExtra)
 
-tax_and_spec_diversity_values_24 <- left_join(twentyfour_field_diversity, metrics_24, by = c('site' = 'identifier', 'subplot_id'))
-tax_and_spec_diversity_values_16 <- left_join(sixteen_field_diversity, metrics_16, by = c('site' = 'identifier', 'subplot_id'))
+tax_and_spec_diversity_values_24 <- left_join(twentyfour_field_diversity$final_results, metrics_24, by = c('site' = 'identifier', 'subplot_id'))
+tax_and_spec_diversity_values_16 <- left_join(sixteen_field_diversity$final_results, metrics_16, by = c('site' = 'identifier', 'subplot_id'))
+
+write.csv(tax_and_spec_diversity_values_24, 'data_out/tax_and_spec_diversity_values_24.csv')
+write.csv(tax_and_spec_diversity_values_16, 'data_out/tax_and_spec_diversity_values_16.csv')
 
 OR
 #tax_and_spec_diversity_values_24 <- read_csv("data_out/tax_and_spec_div_values_24.csv")
@@ -149,7 +178,7 @@ tax_spec_div_long <- tax_and_spec_diversity_values_24 %>%
   pivot_longer(cols = c(species_richness, shannon_diversity, simpson_diversity, pielou_evenness),
                names_to = "taxonomic_metric",
                values_to = "taxonomic_value") %>%
-  pivot_longer(cols = c(CV, SV, CHV),
+  pivot_longer(cols = c(CV, SV, CHV, CHV_nopca),
                names_to = "spectral_metric",
                values_to = "spectral_value")
 
@@ -197,7 +226,7 @@ masked_24_plot <- tax_spec_div_long %>%
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank()) 
 
-
+library(gridExtra)
 grid.arrange(unmasked_24_plot, masked_24_plot, ncol = 2)
 
 
@@ -208,7 +237,7 @@ tax_spec_div_long_16 <- tax_and_spec_diversity_values_16 %>%
   pivot_longer(cols = c(species_richness, shannon_diversity, simpson_diversity, pielou_evenness),
                names_to = "taxonomic_metric",
                values_to = "taxonomic_value") %>%
-  pivot_longer(cols = c(CV, SV, CHV),
+  pivot_longer(cols = c(CV, SV, CHV, CHV_nopca),
                names_to = "spectral_metric",
                values_to = "spectral_value")
 

@@ -42,76 +42,126 @@ for (folder in folders) {
   # create output file as .tif and as .envi
   output_filename <- file.path(output_dir, paste0(folder, "_combined_image"))
   # write .tif file
- # writeRaster(combined_image, filename = paste0(output_filename,'.tif'), format = "GTiff", options="INTERLEAVE=BAND", overwrite = TRUE)
-  # write .envi file
-  writeRaster(combined_image, filename = paste0(output_filename,'.envi'), format = "ENVI", options="INTERLEAVE=BAND", overwrite = TRUE)
-  
+ writeRaster(combined_image, filename = paste0(output_filename,'.tif'), format = "GTiff", options="INTERLEAVE=BAND", overwrite = TRUE)
+
   plot(combined_image)
 }
 }
 
-# CREATE_MASKED_RASTER FUNCTION 
-create_masked_raster <- function(envi_dir, mask_dir, masked_raster_dir, year,
-                                 band_names, band_wavelengths,
-                                 window_size = 100, NDVI_Thresh, NIR_Thresh, Blue_Thresh = 0,
-                                 Blue, Red, NIR,
-                                 Continuum_Removal = TRUE, TypePCA = 'SPCA', FilterPCA = TRUE, ExcludedWL = NA){
+# FIND OPTIMUM THRESHOLDS FUNCTION 
+# class = class column for classifications (e.g. veg, ground etc) (col name)
+# value = ndvi, nir - what threshold are you seeking (col name)
+# site = plot reference (col name)
+
+find_optimum_thresholds <- function(df, class, value, site, class_value) {
+  # empty df
+  threshold_df <- data.frame(site = character(), threshold = numeric())
   
-  envi_files <- list.files(file.path(envi_dir, paste0(year)), pattern = 'combined_image.envi$', full.names = TRUE)
-  
-  # if there are no files saved, print so the user knows
-  print(paste("ENVI files found:", envi_files))
-  
-  if (length(envi_files) == 0) {
-    stop("No ENVI files found.")
+  # iterate over sites
+  for (site_name in unique(df[[site]])) {
+    
+    # filter current location
+    site_data <- subset(df, df[[site]] == site_name)
+    
+    # binary outcome variable for veg and non-veg
+    site_data$binary_class <- ifelse(site_data[[class]] == class_value, 1, 0)
+    
+    # ROC curve
+    roc_result <- roc(site_data$binary_class, site_data[[value]])
+    
+    # find optimum threshold
+    best_threshold <- coords(roc_result, 'best')$threshold
+    
+    # append to the result data frame
+    threshold_df <- rbind(threshold_df, data.frame(site = site_name, threshold = best_threshold))
   }
   
-  for (envi_file in envi_files){
+  return(threshold_df)
+}
+
+# CREATE_MASKED_RASTER FUNCTION 
+#input can be directory with a number of files, a single file, or string of files.
+#ndvi and nir thresholds can be provided as a df, if there are diff optimum values per site
+# or as a single value for all sites
+# this function assumes that layers are stacked in WAVELENGTH ORDER
+#think about how you can make this more general for users - e.g. it requires the plot id to
+# be in the file name currently - think about usability
+create_masked_raster <- function(input, output_dir, 
+                                 band_wavelengths, 
+                                 NDVI_Thresh = 0.2, NIR_Thresh = 0.2,
+                                 Red_band = 660, NIR_band = 790,
+                                 NDVI_Thresh_df = NULL, NIR_Thresh_df = NULL) {
+  
+  if (dir.exists(input)) {
+    # list all ENVI or TIF files in the directory
+    files <- list.files(file.path(input), pattern = '\\.(envi|tif)$', full.names = TRUE)
+  } else if (file.exists(input) || is.character(input)) {
+    # single file input or string of files
+    files <- input
+  } else {
+    stop("Invalid input provided.")
+  }
+  
+  print(paste("Files found:", files))
+  
+  if (length(files) == 0) {
+    stop("No files found.")
+  }
+  
+  for (file in files) {
+    # Extract the site identifier from file name
+    site_id <- strsplit(basename(file), "_")[[1]][1]
     
-    #open the .hdr file so you can add required info to it
-    HDR <- read_ENVI_header(HDRpath = paste0(file_path_sans_ext(envi_file),'.hdr'))
-    
-    HDR$wavelength <- band_wavelengths
-    HDR$'band names' <- band_names
-    HDR$'wavelength units' <- 'Nanometers'
-    
-    write_ENVI_header(HDR = HDR, HDRpath = paste0(file_path_sans_ext(envi_file),'.hdr'))
-    
-    Input_Image_File <- envi_file
-    
-    Input_Mask_File <- perform_radiometric_filtering(Image_Path = Input_Image_File, Mask_Path = FALSE,
-                                                     Output_Dir = mask_dir, TypePCA = TypePCA,
-                                                     NDVI_Thresh = NDVI_Thresh, Blue_Thresh = Blue_Thresh,
-                                                     NIR_Thresh = NIR_Thresh,
-                                                     Blue = Blue,
-                                                     Red = Red,
-                                                     NIR = NIR)
-    
-    print(paste("Mask file created:", Input_Mask_File))
-    
-    mask <- read_stars(Input_Mask_File)
-    mask_raster <- as(mask, "Raster")
-    
-    # print range of mask values 
-    print(paste("Mask value range:", range(values(mask_raster), na.rm = TRUE)))
-    
-    mask_raster[mask_raster == 0] <- NA
-    
-    raster_data <- stack(envi_file)
-    raster_data_masked <- mask(raster_data, mask_raster)
-    
-    masked_year_dir <- file.path(masked_raster_dir, year)
-    if (!dir.exists(masked_year_dir)) {
-      dir.create(masked_year_dir, recursive = TRUE)
+    # Check if NDVI_Thresh_df is provided and extract the relevant threshold values
+    if (!is.null(NDVI_Thresh_df)) {
+      if (site_id %in% NDVI_Thresh_df$site) {
+        NDVI_Thresh <- NDVI_Thresh_df$threshold[NDVI_Thresh_df$site == site_id]
+      } else {
+        stop(paste("No NDVI threshold values found for site", site_id))
+      }
     }
     
-    masked_filename <- file.path(masked_year_dir, paste0(file_path_sans_ext(basename(envi_file)),'_masked'))
+    # Check if NIR_Thresh_df is provided and extract the relevant threshold values
+    if (!is.null(NIR_Thresh_df)) {
+      if (site_id %in% NIR_Thresh_df$site) {
+        NIR_Thresh <- NIR_Thresh_df$threshold[NIR_Thresh_df$site == site_id]
+      } else {
+        stop(paste("No NIR threshold values found for site", site_id))
+      }
+    }
     
-    print(paste("Saving masked raster to:", masked_filename))
+    # Read the raster stack
+    raster_data <- stack(file)
     
-    writeRaster(raster_data_masked, filename = masked_filename, format = "GTiff", options="INTERLEAVE=BAND", overwrite = TRUE)
+    # Identify the bands for Red and NIR
+    red_layer <- which(band_wavelengths == Red_band)
+    nir_layer <- which(band_wavelengths == NIR_band)
+    
+    if (length(red_layer) == 0 | length(nir_layer) == 0) {
+      stop("Red or NIR band not found in the raster.")
+    }
+    
+    # Extract Red and NIR bands
+    red <- raster_data[[red_layer]]
+    nir <- raster_data[[nir_layer]]
+    
+    # Calculate NDVI
+    ndvi <- (nir - red) / (nir + red)
+    
+    # Create a mask based on NDVI and NIR thresholds
+    mask <- (ndvi < NDVI_Thresh) | (nir < NIR_Thresh)
+    
+    # Apply the mask to the raster data
+    raster_data_masked <- mask(raster_data, mask, maskvalue = TRUE, updatevalue = NA)
+    
+    # Save the masked raster
+    masked_filename <- file.path(output_dir, paste0(file_path_sans_ext(basename(file)), '_masked.tif'))
+    writeRaster(raster_data_masked, filename = masked_filename, format = "GTiff", overwrite = TRUE)
+    
+    print(paste("Masked raster saved to:", masked_filename))
+    }
   }
-}
+
 
 
 ## EXTRACT PIXEL VALUES FUNCTION
@@ -210,28 +260,125 @@ calculate_sv <- function(pixel_values_df, subplots, wavelengths) {
 }
 
 # chv function
-calculate_chv <- function(pixel_values_df, subplots, wavelengths) {
-  subplot_of_interest <- deparse(substitute(subplots))
+calculate_chv <- function(df, dim) {
+  CHV_df <- df %>%
+    select(1:dim)
   
-  PCA <- pixel_values_df %>%
-    select(c({{wavelengths}})) %>%
-    rda(scale = F)
+  # convert to matrix
+  CHV_matrix <- as.matrix(CHV_df)
   
-  CHV <- data.frame(PCA$CA$u) %>%
-    select(c(1:3)) %>%
-    cbind({{pixel_values_df}}) %>%
-    select(c('PC1', 'PC2', 'PC3', {{subplots}})) %>%
-    group_split({{subplots}}) %>%
-    set_names(map(., ~unique(.[[subplot_of_interest]]))) %>%
-    map(~convhulln(.x[-4], option = 'FA')) %>%
-    map_dbl('vol') %>%
-    as.data.frame() %>%
-    rownames_to_column('subplot_id') %>%
-    rename(CHV = '.')
-  
-  rm(subplot_of_interest) 
-  
+  # calculate chv
+  CHV <- geometry::convhulln(CHV_matrix, option = "FA")
   return(CHV)
+}
+
+# function to calculate chv for each subplot
+calculate_chv_for_subplots <- function(df, wavelengths, dim = 3, subplots = 'subplot_id', rarefraction = TRUE, n = 999) {
+  results <- tibble(subplot_id = character(), CHV = double())
+  
+  # Perform PCA for specified wavelengths
+  PCA <- df %>%
+    select(all_of(wavelengths)) %>%
+    vegan::rda(scale = FALSE)
+  
+  # Add subplot id as column to PCA df
+  pca_results <- data.frame(PCA$CA$u) %>%
+    bind_cols(subplot_id = df[[subplots]])
+  
+  # Compute the minimum number of points across all subplots
+  min_points <- pca_results %>%
+    group_by(subplot_id) %>%
+    summarise(points = n()) %>%
+    summarise(min_points = min(points)) %>%
+    pull(min_points)
+  
+  # Loop through each subplot 
+  for (subplot in unique(df[[subplots]])) {
+    # Subset data for current subplot
+    subplot_sample <- pca_results %>%
+      filter(subplot_id == subplot)
+    
+    if (rarefraction) {
+      # Resample CHV 999 times and calculate the mean
+      chv_values <- replicate(n, {
+        resampled <- subplot_sample %>%
+          select(-subplot_id) %>%
+          sample_n(min_points, replace = FALSE)
+        
+        chv_out <- calculate_chv(resampled, dim = dim)
+        return(chv_out$vol)
+      })
+      
+      mean_chv <- mean(chv_values)
+    } else {
+      # Calculate CHV without resampling
+      chv_out <- calculate_chv(subplot_sample, dim = dim)
+      mean_chv <- chv_out$vol
+    }
+    
+    # Store results
+    results <- results %>%
+      add_row(subplot_id = subplot, CHV = mean_chv)
+  }
+  
+  return(results)
+}
+
+
+# chv function
+chv_nopca <- function(df, wavelengths) {
+  CHV_df <- df %>%
+    select({{wavelengths}})
+  
+  # convert to matrix
+  CHV_matrix <- as.matrix(CHV_df)
+  
+  # calculate chv
+  CHV <- geometry::convhulln(CHV_matrix, option = "FA")
+  return(CHV)
+}
+
+#chv no pca funx
+calculate_chv_nopca <- function(df, wavelengths, subplots = 'subplot_id', rarefraction = TRUE, n = 999) {
+  results <- tibble(subplot_id = character(), CHV_nopca = double())
+  
+  # Compute the minimum number of points across all subplots
+  min_points <- df %>%
+    group_by(subplot_id) %>%
+    summarise(points = n()) %>%
+    summarise(min_points = min(points)) %>%
+    pull(min_points)
+  
+  # Loop through each subplot 
+  for (subplot in unique(df[[subplots]])) {
+    # Subset data for current subplot
+    subplot_sample <- df %>%
+      filter(subplot_id == subplot)
+    
+    if (rarefraction) {
+      # Resample CHV 999 times and calculate the mean
+      chv_values <- replicate(n, {
+        resampled <- subplot_sample %>%
+          select(all_of(wavelengths)) %>%
+          sample_n(min_points, replace = FALSE)
+        
+        chv_out <- chv_nopca(resampled, wavelengths)
+        return(chv_out$vol)
+      })
+      
+      mean_chv <- mean(chv_values)
+    } else {
+      # Calculate CHV without resampling
+      chv_out <- chv_nopca(subplot_sample, wavelengths)
+      mean_chv <- chv_out$vol
+    }
+    
+    # Store results
+    results <- results %>%
+      add_row(subplot_id = subplot, CHV_nopca = mean_chv)
+  }
+  
+  return(results)
 }
 
 ## FUNCTION FOR CALCULATING ALL METRICS
@@ -248,21 +395,24 @@ calculate_metrics <- function(pixel_values_df, masked = TRUE, wavelengths) {
     # calculate metrics (CV, SV, CHV)
     cv <- calculate_cv(site_pixel_values, subplot_id, wavelengths)
     sv <- calculate_sv(site_pixel_values, subplot_id, wavelengths)
-    chv <- calculate_chv(site_pixel_values, subplot_id, wavelengths)
-    
+    chv <- calculate_chv_for_subplots(site_pixel_values, wavelengths)
+    chv_nopca <- calculate_chv_nopca(site_pixel_values, wavelengths)
+      
     # store results
-    results[[identifier]] <- list(CV = cv, SV = sv, CHV = chv)
+    results[[identifier]] <- list(CV = cv, SV = sv, CHV = chv, CHV_nopca = chv_nopca)
   }
   
   # combine metrics into data frames
   combined_cv <- bind_rows(lapply(results, function(x) x$CV), .id = 'identifier')
   combined_sv <- bind_rows(lapply(results, function(x) x$SV), .id = 'identifier')
   combined_chv <- bind_rows(lapply(results, function(x) x$CHV), .id = 'identifier')
+  combined_chv_nopca <- bind_rows(lapply(results, function(x) x$CHV_nopca), .id = 'identifier')
   
   # create a data frame for combined metrics
   combined_metrics <- combined_cv %>%
     left_join(combined_sv, by = c("identifier", "subplot_id")) %>%
-    left_join(combined_chv, by = c("identifier", "subplot_id"))
+    left_join(combined_chv, by = c("identifier", "subplot_id")) %>%
+    left_join(combined_chv_nopca, by = c('identifier', 'subplot_id'))
   
   # add image_type column based on masked argument
   if (masked) {
@@ -424,5 +574,8 @@ calculate_field_diversity <- function(survey_data){
   # combine into one df
   final_results <- bind_rows(all_site_results, .id = "site")
   
-  return(final_results)
+  return(list(final_results = final_results, community_matrices = community_matrices))
 }
+
+install.packages('usethis')
+library(usethis)

@@ -67,7 +67,7 @@ find_optimum_thresholds <- function(df, class, value, site, class_value) {
     site_data$binary_class <- ifelse(site_data[[class]] == class_value, 1, 0)
     
     # ROC curve
-    roc_result <- roc(site_data$binary_class, site_data[[value]])
+    roc_result <- pROC::roc(site_data$binary_class, site_data[[value]])
     
     # find optimum threshold
     best_threshold <- coords(roc_result, 'best')$threshold
@@ -166,7 +166,7 @@ create_masked_raster <- function(input, output_dir,
 
 ## EXTRACT PIXEL VALUES FUNCTION
 
-extract_pixels_values <- function(raster_files, subplot_files, wavelength_names){
+extract_pixel_values <- function(raster_files, subplot_files, wavelength_names){
   
   all_pixel_values_list <- list()
   
@@ -224,8 +224,11 @@ extract_pixels_values <- function(raster_files, subplot_files, wavelength_names)
     # add to overall list with all raster data pixel values 
     all_pixel_values_list[[identifier]] <- all_pixel_values
   }
-  return(all_pixel_values_list)
+  combined_values <- bind_rows(extracted_values_list, .id = 'identifier')
+  
+  return(combined_values)
 }
+
 
 
 ## CV, CHV, SV metric functions appropriated from https://github.com/ALCrofts/CABO_SVH_Forest_Sites/tree/v1.0
@@ -462,73 +465,39 @@ calculate_field_diversity <- function(survey_data){
     site_survey_data$X_plot <- NA 
     site_survey_data$Y_plot <- NA
     
-    # For loop to homogenize transects and numbers. It converts all W-E to E-W and all N-S to S-N 
-    for (i in 1:nrow(site_survey_data)){
-      if (site_survey_data[i, "transect_direction"] == "W-E") {
-        site_survey_data[i, "point_number2"] <- 100 - site_survey_data[i, "point_number"] # If transect E-W, transect fixed is W-E and inverse numbers
-        site_survey_data[i, "transect_direction2"] <- "E-W"
-      }
-      if (site_survey_data[i, "transect_direction"] == "E-W") {
-        site_survey_data[i, "point_number2"] <- site_survey_data[i, "point_number"] # If transect W-E, all stays the same
-        site_survey_data[i, "transect_direction2"] <- "E-W"
-      }
-      if (site_survey_data[i, "transect_direction"] == "S-N") {
-        site_survey_data[i, "point_number2"] <- site_survey_data[i, "point_number"] # If transect N-S, all stays the same
-        site_survey_data[i, "transect_direction2"] <- "S-N"
-      }
-      if (site_survey_data[i, "transect_direction"] == "N-S") {
-        site_survey_data[i, "point_number2"] <- 100 - site_survey_data[i, "point_number"] # If transect S-N, transect fixed is N-S and inverse numbers
-        site_survey_data[i, "transect_direction2"] <- "S-N"
-      }
-    }
+    site_survey_data <- site_survey_data %>%
+      mutate(
+        point_number2 = case_when(
+          transect_direction == "E-W" ~ 100 - point_number,
+          transect_direction == "N-S" ~ 100 - point_number,
+          TRUE ~ point_number
+        ),
+        transect_direction2 = case_when(
+          transect_direction %in% c("W-E", "E-W") ~ "W-E",
+          transect_direction %in% c("N-S", "S-N") ~ "S-N"
+        )
+      )
     
-    # For loop to assign plotXY coordinates to each point intercept
-    for (i in 1:nrow(site_survey_data)){
-      if (site_survey_data[i, "transect_direction2"] == "E-W") {
-        if (site_survey_data[i, "transect_number"] == 1){
-          site_survey_data[i, "Y_plot"] <- 10
-          site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-        }
-        if (site_survey_data[i, "transect_number"] == 2){
-          site_survey_data[i, "Y_plot"] <- 30
-          site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-        }
-        if (site_survey_data[i, "transect_number"] == 3){
-          site_survey_data[i, "Y_plot"] <- 50
-          site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-        }
-        if (site_survey_data[i, "transect_number"] == 4){
-          site_survey_data[i, "Y_plot"] <- 70
-          site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-        }
-        if (site_survey_data[i, "transect_number"] == 5){
-          site_survey_data[i, "Y_plot"] <- 90
-          site_survey_data[i, "X_plot"] <- site_survey_data[i, "point_number2"]
-        }
-      }
-      if (site_survey_data[i, "transect_direction2"] == "S-N") {
-        if (site_survey_data[i, "transect_number"] == 1){
-          site_survey_data[i, "X_plot"] <- 10
-          site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-        }
-        if (site_survey_data[i, "transect_number"] == 2){
-          site_survey_data[i, "X_plot"] <- 30
-          site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-        }
-        if (site_survey_data[i, "transect_number"] == 3){
-          site_survey_data[i, "X_plot"] <- 50
-          site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-        }
-        if (site_survey_data[i, "transect_number"] == 4){
-          site_survey_data[i, "X_plot"] <- 70
-          site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-        }
-        if (site_survey_data[i, "transect_number"] == 5){
-          site_survey_data[i, "X_plot"] <- 90
-          site_survey_data[i, "Y_plot"] <- site_survey_data[i, "point_number2"]
-        }
-      }
-    }
+    # Assign plotXY coordinates based on 'transect_direction2' and 'transect_number'
+    site_survey_data <- site_survey_data %>%
+      mutate(
+        X_plot = case_when(
+          transect_direction2 == "W-E" ~ point_number2,
+          transect_direction2 == "S-N" & transect_number == 1 ~ 10,
+          transect_direction2 == "S-N" & transect_number == 2 ~ 30,
+          transect_direction2 == "S-N" & transect_number == 3 ~ 50,
+          transect_direction2 == "S-N" & transect_number == 4 ~ 70,
+          transect_direction2 == "S-N" & transect_number == 5 ~ 90
+        ),
+        Y_plot = case_when(
+          transect_direction2 == "S-N" ~ point_number2,
+          transect_direction2 == "W-E" & transect_number == 1 ~ 10,
+          transect_direction2 == "W-E" & transect_number == 2 ~ 30,
+          transect_direction2 == "W-E" & transect_number == 3 ~ 50,
+          transect_direction2 == "W-E" & transect_number == 4 ~ 70,
+          transect_direction2 == "W-E" & transect_number == 5 ~ 90
+        )
+      )
     
     # subplot rows and columns - +1 ensures 0 point values fall into correct subplot, 
     # pmin ensures 100 point values falls in correct subplot given +1
@@ -540,22 +509,24 @@ calculate_field_diversity <- function(survey_data){
     
     subplot_diversity <- site_survey_data %>%
       drop_na(standardised_name) %>%
+      filter(!standardised_name %in% c('Dead grass', 'Dead shrub')) %>% 
       group_by(subplot_id) %>%
       summarise(species_richness = n_distinct(standardised_name))
     
     community_matrix <- site_survey_data %>%
       drop_na(standardised_name) %>%
+      filter(!standardised_name %in% c('Dead grass', 'Dead shrub')) %>% 
       count(subplot_id, standardised_name) %>%
       spread(standardised_name, n, fill = 0)
     
-    # store the community matrix in the list - this is a temp step to check!!!
-    community_matrices[[site]] <- community_matrix
-    
     # remove unwanted column if it exists -- WHY DOES THIS COLUMN EXIST~!!!!>???>
-    if ("V1" %in% colnames(community_matrix)) {
-      community_matrix <- community_matrix %>% 
-        dplyr::select(-V1)
-    }
+ #   if ("V1" %in% colnames(community_matrix)) {
+  #    community_matrix <- community_matrix %>% 
+   #     dplyr::select(-V1)
+  #  }
+    
+    # store the community matrix in the list - this is good for checking
+    community_matrices[[site]] <- community_matrix
     
     # calculate diversity indices
     shannon_diversity <- diversity(community_matrix[, -1], index = "shannon")
@@ -577,5 +548,3 @@ calculate_field_diversity <- function(survey_data){
   return(list(final_results = final_results, community_matrices = community_matrices))
 }
 
-install.packages('usethis')
-library(usethis)

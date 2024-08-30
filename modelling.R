@@ -7,7 +7,12 @@ library(lme4)
 
 tax_and_spec_diversity_values <- read_csv('data_out/tax_and_spec_diversity_values.csv')
 
-taxonomic_metrics <- c("species_richness", "shannon_diversity", "simpson_diversity", "pielou_evenness")
+tax_and_spec_diversity_values$exp_shannon <- exp(tax_and_spec_diversity_values$shannon_diversity)
+tax_and_spec_diversity_values$inv_simpson <- 1 / (tax_and_spec_diversity_values$simpson_diversity)
+
+
+taxonomic_metrics <- c("species_richness", "shannon_diversity", "simpson_diversity", 
+                       "pielou_evenness", "exp_shannon", "inv_simpson")
 spectral_metrics <- c("CV", "SV", "CHV", "CHV_nopca")
 image_types <- c("masked", "unmasked")
 years <- c('2016', '2024')
@@ -79,23 +84,23 @@ print(results_df)
 
 # alive -------------------------------------------------------------------
 
-
-alive_tax_and_spec_diversity_values <- read_csv('data_out/alive_tax_and_spec_diversity_values.csv')
 library(glmmTMB)
 library(performance)
 library(dplyr)
 library(readr)
 
-# Load the data
 alive_tax_and_spec_diversity_values <- read_csv('data_out/alive_tax_and_spec_diversity_values.csv')
 
-# Define metrics, image types, and years
-taxonomic_metrics <- c("species_richness", "shannon_diversity", "simpson_diversity", "pielou_evenness")
+alive_tax_and_spec_diversity_values$exp_shannon <- exp(alive_tax_and_spec_diversity_values$shannon_diversity)
+alive_tax_and_spec_diversity_values$inv_simpson <- 1 / (alive_tax_and_spec_diversity_values$simpson_diversity)
+
+taxonomic_metrics <- c("species_richness", "shannon_diversity", "simpson_diversity", 
+                       "pielou_evenness", "exp_shannon", "inv_simpson")
 spectral_metrics <- c("CV", "SV", "CHV", "CHV_nopca")
 image_types <- c("masked", "unmasked")
 years <- c('2016', '2024')
 
-# Initialize the results data frame
+
 alive_results_df <- data.frame(
   year = integer(),
   image_type = character(),
@@ -107,7 +112,7 @@ alive_results_df <- data.frame(
   stringsAsFactors = FALSE
 )
 
-# Loop through years, image types, and metrics
+# loop through years, tax and spec metrics
 for (year in years) {
   for (img_type in image_types) {
     # Filter data for the current year and image type
@@ -177,7 +182,7 @@ spectral_metrics <- c("CV", "SV", "CHV")
 image_types <- c("masked", "unmasked")
 years <- c('2016', '2024')
 
-# Initialize the results data frame
+
 rs_results <- data.frame(
   year = integer(),
   image_type = character(),
@@ -189,7 +194,7 @@ rs_results <- data.frame(
   stringsAsFactors = FALSE
 )
 
-# Loop through years, image types, and metrics
+
 for (year in years) {
   for (img_type in image_types) {
     # Filter data for the current year and image type

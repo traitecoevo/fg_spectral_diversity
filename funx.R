@@ -224,7 +224,7 @@ extract_pixel_values <- function(raster_files, subplot_files, wavelength_names){
     # add to overall list with all raster data pixel values 
     all_pixel_values_list[[identifier]] <- all_pixel_values
   }
-  combined_values <- bind_rows(extracted_values_list, .id = 'identifier')
+  combined_values <- bind_rows(all_pixel_values_list, .id = 'identifier')
   
   return(combined_values)
 }
@@ -328,62 +328,6 @@ calculate_chv_for_subplots <- function(df, wavelengths, dim = 3, subplots = 'sub
 }
 
 
-# chv function
-chv_nopca <- function(df, wavelengths) {
-  CHV_df <- df %>%
-    select({{wavelengths}})
-  
-  # convert to matrix
-  CHV_matrix <- as.matrix(CHV_df)
-  
-  # calculate chv
-  CHV <- geometry::convhulln(CHV_matrix, option = "FA")
-  return(CHV)
-}
-
-#chv no pca funx
-calculate_chv_nopca <- function(df, wavelengths, subplots = 'subplot_id', rarefraction = TRUE, n = 999) {
-  results <- tibble(subplot_id = character(), CHV_nopca = double())
-  
-  # Compute the minimum number of points across all subplots
-  min_points <- df %>%
-    group_by(subplot_id) %>%
-    summarise(points = n()) %>%
-    summarise(min_points = min(points)) %>%
-    pull(min_points)
-  
-  # Loop through each subplot 
-  for (subplot in unique(df[[subplots]])) {
-    # Subset data for current subplot
-    subplot_sample <- df %>%
-      filter(subplot_id == subplot)
-    
-    if (rarefraction) {
-      # Resample CHV 999 times and calculate the mean
-      chv_values <- replicate(n, {
-        resampled <- subplot_sample %>%
-          select(all_of(wavelengths)) %>%
-          sample_n(min_points, replace = FALSE)
-        
-        chv_out <- chv_nopca(resampled, wavelengths)
-        return(chv_out$vol)
-      })
-      
-      mean_chv <- mean(chv_values)
-    } else {
-      # Calculate CHV without resampling
-      chv_out <- chv_nopca(subplot_sample, wavelengths)
-      mean_chv <- chv_out$vol
-    }
-    
-    # Store results
-    results <- results %>%
-      add_row(subplot_id = subplot, CHV_nopca = mean_chv)
-  }
-  
-  return(results)
-}
-
 ## FUNCTION FOR CALCULATING ALL METRICS
 
 calculate_metrics <- function(pixel_values_df, masked = TRUE, wavelengths) {
@@ -399,7 +343,6 @@ calculate_metrics <- function(pixel_values_df, masked = TRUE, wavelengths) {
     cv <- calculate_cv(site_pixel_values, subplot_id, wavelengths)
     sv <- calculate_sv(site_pixel_values, subplot_id, wavelengths)
     chv <- calculate_chv_for_subplots(site_pixel_values, wavelengths)
-    chv_nopca <- calculate_chv_nopca(site_pixel_values, wavelengths)
       
     # store results
     results[[identifier]] <- list(CV = cv, SV = sv, CHV = chv, CHV_nopca = chv_nopca)
@@ -409,13 +352,11 @@ calculate_metrics <- function(pixel_values_df, masked = TRUE, wavelengths) {
   combined_cv <- bind_rows(lapply(results, function(x) x$CV), .id = 'identifier')
   combined_sv <- bind_rows(lapply(results, function(x) x$SV), .id = 'identifier')
   combined_chv <- bind_rows(lapply(results, function(x) x$CHV), .id = 'identifier')
-  combined_chv_nopca <- bind_rows(lapply(results, function(x) x$CHV_nopca), .id = 'identifier')
   
   # create a data frame for combined metrics
   combined_metrics <- combined_cv %>%
     left_join(combined_sv, by = c("identifier", "subplot_id")) %>%
-    left_join(combined_chv, by = c("identifier", "subplot_id")) %>%
-    left_join(combined_chv_nopca, by = c('identifier', 'subplot_id'))
+    left_join(combined_chv, by = c("identifier", "subplot_id")) 
   
   # add image_type column based on masked argument
   if (masked) {

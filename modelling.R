@@ -4,18 +4,30 @@ library(easystats)
 library(performance)
 library(lme4)
 
-
-tax_and_spec_diversity_values <- read_csv('data_out/tax_and_spec_diversity_values.csv')
-
-tax_and_spec_diversity_values$exp_shannon <- exp(tax_and_spec_diversity_values$shannon_diversity)
-tax_and_spec_diversity_values$inv_simpson <- 1 / (tax_and_spec_diversity_values$simpson_diversity)
+library(tidyverse)
+library(glmmTMB)
+library(performance)
 
 
-taxonomic_metrics <- c("species_richness", "shannon_diversity", "simpson_diversity", 
-                       "pielou_evenness", "exp_shannon", "inv_simpson")
-spectral_metrics <- c("CV", "SV", "CHV", "CHV_nopca")
-image_types <- c("masked", "unmasked")
-years <- c('2016', '2024')
+df <- tax_and_spec_diversity_values_24 %>%
+  filter(image_type == 'masked')
+
+model <- glmmTMB(species_richness ~ scale(CV_rf) + (1|site), data = df)
+summary(model)
+
+tax_and_spec_div_values <- read_csv('data_out/tax_and_spec_diversity_values.csv')
+
+taxonomic_metrics <- c("species_richness", 
+                       "shannon_diversity", 
+                       "simpson_diversity", 
+                       "pielou_evenness")
+spectral_metrics <- c("CV_rf",
+                      "SV", 
+                      "CHV")
+image_types <- c("masked", 
+                 "unmasked")
+years <- c("2016", 
+           "2024")
 
 # Initialize the results data frame
 results_df <- data.frame(
@@ -26,25 +38,30 @@ results_df <- data.frame(
   r2_marginal = numeric(),
   r2_conditional = numeric(),
   correlation_coefficient = numeric(),
+  assumption_check = character(),
   stringsAsFactors = FALSE
 )
 
+
+plot_dir <- "model_assumptions_plots" # Directory to save the plots
+dir.create(plot_dir, showWarnings = FALSE) # Create directory if it doesn't exist
+
 for (year in years) {
   for (img_type in image_types) {
-    # Filter data for the current year and image type
-    df_filtered <- tax_and_spec_diversity_values %>%
+    # filter for year and image type
+    df_filtered <- tax_and_spec_div_values %>%
       filter(year == !!year, image_type == img_type)
     
     for (tax in taxonomic_metrics) {
       for (spec in spectral_metrics) {
         
-        # Fit the model
+        # fit model
         model <- try(glmmTMB(
           formula = as.formula(paste(tax, "~ scale(", spec, ") + (1 | site)")),
           data = df_filtered
         ), silent = TRUE)
         
-        # Handle any errors in fitting the model
+        # handle any errors in fitting the model
         if (!inherits(model, "try-error")) {
           # Calculate R2 values using r2_nakagawa
           r2_values <- r2_nakagawa(model)
@@ -52,13 +69,28 @@ for (year in years) {
           r2_marginal <- format(r2_values$R2_marginal, scientific = FALSE)
           r2_conditional <- format(r2_values$R2_conditional, scientific = FALSE)
           
-          # Calculate predicted values from the model
+          # calculate predicted values from the model
           predicted_values <- predict(model)
           
-          # Calculate Pearson correlation between observed and predicted values
+          # calculate Pearson correlation between observed and predicted values
           correlation_coefficient <- cor(df_filtered[[tax]], predicted_values, use = "complete.obs")
           
-          # Store the results
+          # check model assumptions
+          assumption_check <- tryCatch({
+            # use check_model to check all assumptions
+            check_results <- check_model(model)
+            
+            # visualize and save the check results
+            plot_file_name <- paste0(plot_dir, "/", year, "_", img_type, "_", tax, "_vs_", spec, ".png")
+            ggsave(plot_file_name, plot(check_results), width = 10, height = 8)
+            
+            # return a summary or a flag if assumptions are met
+            if (all(summary(check_results)$OK)) "Assumptions OK" else "Issues Detected"
+          }, error = function(e) {
+            "Assumption Check Error"
+          })
+          
+          # store the results
           results_df <- rbind(results_df, data.frame(
             year = year,
             image_type = img_type,
@@ -66,7 +98,8 @@ for (year in years) {
             spectral_metric = spec,
             r2_marginal = r2_marginal,
             r2_conditional = r2_conditional,
-            correlation_coefficient = correlation_coefficient
+            correlation_coefficient = correlation_coefficient,
+            assumption_check = assumption_check
           ))
         }
       }
@@ -74,13 +107,10 @@ for (year in years) {
   }
 }
 
+results_df %>%
+  View()
 
-
-# Print the final results
-print(results_df)
-
-
-
+write.csv(results_df, 'data_out/modelling_results2.csv')
 
 # alive -------------------------------------------------------------------
 
@@ -90,9 +120,6 @@ library(dplyr)
 library(readr)
 
 alive_tax_and_spec_diversity_values <- read_csv('data_out/alive_tax_and_spec_diversity_values.csv')
-
-alive_tax_and_spec_diversity_values$exp_shannon <- exp(alive_tax_and_spec_diversity_values$shannon_diversity)
-alive_tax_and_spec_diversity_values$inv_simpson <- 1 / (alive_tax_and_spec_diversity_values$simpson_diversity)
 
 taxonomic_metrics <- c("species_richness", "shannon_diversity", "simpson_diversity", 
                        "pielou_evenness", "exp_shannon", "inv_simpson")
@@ -115,38 +142,32 @@ alive_results_df <- data.frame(
 # loop through years, tax and spec metrics
 for (year in years) {
   for (img_type in image_types) {
-    # Filter data for the current year and image type
+    # filter data for year and image type
     df_filtered <- alive_tax_and_spec_diversity_values %>%
       filter(year == !!year, image_type == img_type)
-    
-    # Check if the filtered data is empty
-    if (nrow(df_filtered) == 0) {
-      cat("No data for year:", year, "and image type:", img_type, "\n")
-      next
-    }
     
     for (tax in taxonomic_metrics) {
       for (spec in spectral_metrics) {
         
-        # Fit the model
+        # fit model
         model <- try(glmmTMB(
           formula = as.formula(paste(tax, "~ scale(", spec, ") + (1 | site)")),
           data = df_filtered
         ), silent = TRUE)
         
-        # Handle any errors in fitting the model
+        # handle any errors in fitting the model
         if (!inherits(model, "try-error")) {
-          # Calculate R2 values using r2_nakagawa
+          # calculate R2 values using r2_nakagawa
           r2_values <- r2_nakagawa(model)
           
           r2_marginal <- format(r2_values$R2_marginal, scientific = FALSE)
           r2_conditional <- format(r2_values$R2_conditional, scientific = FALSE)
           
-          # Calculate Pearson correlation between observed and predicted values
+          # calculate Pearson correlation between observed and predicted values
           predicted_values <- predict(model)
           correlation_coefficient <- cor(df_filtered[[tax]], predicted_values, use = "complete.obs")
           
-          # Store the results
+          # store results
           alive_results_df <- rbind(alive_results_df, data.frame(
             year = year,
             image_type = img_type,
@@ -165,8 +186,10 @@ for (year in years) {
   }
 }
 
-# Check the results
+
 print(alive_results_df)
+
+write.csv(alive_results_df, 'data_out/alive_modelling_results.csv')
 
 
 # resampled data ----------------------------------------------------------
@@ -175,9 +198,11 @@ print(alive_results_df)
 #then combine and do one model for all years but use 'year' as a random effect??
 
 
-rs_tax_and_spec_div_values_1624 <- rbind(rs_tax_and_spec_div_values, tax_and_spec_diversity_values_16)
 
-taxonomic_metrics <- c("species_richness", "shannon_diversity", "simpson_diversity", "pielou_evenness")
+rs_tax_and_spec_div_values <- read_csv('data_out/resampled24_and_16_spec_and_div_values.csv')
+
+taxonomic_metrics <- c("species_richness", "shannon_diversity", "simpson_diversity", 
+                       "pielou_evenness", "exp_shannon", "inv_simpson")
 spectral_metrics <- c("CV", "SV", "CHV")
 image_types <- c("masked", "unmasked")
 years <- c('2016', '2024')
@@ -197,38 +222,33 @@ rs_results <- data.frame(
 
 for (year in years) {
   for (img_type in image_types) {
-    # Filter data for the current year and image type
+    # filter data for year and image type
     df_filtered <- rs_tax_and_spec_div_values_1624 %>%
       filter(year == !!year, image_type == img_type)
     
-    # Check if the filtered data is empty
-    if (nrow(df_filtered) == 0) {
-      cat("No data for year:", year, "and image type:", img_type, "\n")
-      next
-    }
     
     for (tax in taxonomic_metrics) {
       for (spec in spectral_metrics) {
         
-        # Fit the model
+        # fit model
         model <- try(glmmTMB(
           formula = as.formula(paste(tax, "~ scale(", spec, ") + (1 | site)")),
           data = df_filtered
         ), silent = TRUE)
         
-        # Handle any errors in fitting the model
+        # handle any errors in fitting the model
         if (!inherits(model, "try-error")) {
-          # Calculate R2 values using r2_nakagawa
+          # calculate R2 values using r2_nakagawa
           r2_values <- r2_nakagawa(model)
           
           r2_marginal <- format(r2_values$R2_marginal, scientific = FALSE)
           r2_conditional <- format(r2_values$R2_conditional, scientific = FALSE)
           
-          # Calculate Pearson correlation between observed and predicted values
+          # calculate Pearson correlation between observed and predicted values
           predicted_values <- predict(model)
           correlation_coefficient <- cor(df_filtered[[tax]], predicted_values, use = "complete.obs")
           
-          # Store the results
+          # store the results
           rs_results <- rbind(rs_results, data.frame(
             year = year,
             image_type = img_type,
@@ -247,6 +267,7 @@ for (year in years) {
   }
 }
 
+write.csv(rs_results, 'data_out/rs_modelling_results.csv')
 
 # add year as random effect to your model and combine. would year or subplot
 # be the random effect?
@@ -264,7 +285,6 @@ rs_results_2 <- data.frame(
   spectral_metric = character(),
   r2_marginal = numeric(),
   r2_conditional = numeric(),
-  correlation_coefficient = numeric(),
   stringsAsFactors = FALSE
 )
 
@@ -284,12 +304,9 @@ for (img_type in image_types) {
       if (!inherits(model, "try-error")) {
         r2_values <- r2_nakagawa(model)
         
-        # Calculate Pearson correlation between observed and predicted values
-        predicted_values <- predict(model)
-        correlation_coefficient <- cor(df_filtered[[tax]], predicted_values, use = "complete.obs")
         
         # Store the results
-        rs_results_2 <- rbind(rs_results, data.frame(
+        rs_results_2 <- rbind(rs_results_2, data.frame(
           year = "2016 & 2024",
           image_type = img_type,
           taxonomic_metric = tax,
@@ -307,6 +324,81 @@ for (img_type in image_types) {
 }
 
 
+
+# tall plant analysis -----------------------------------------------------
+
+
+tall_tax_and_spec_div_values <- read_csv('data_out/tall_tax_and_spec_diversity_values.csv')
+
+taxonomic_metrics <- c("species_richness", "shannon_diversity", "simpson_diversity", 
+                       "pielou_evenness", "exp_shannon", "inv_simpson")
+spectral_metrics <- c("CV", "CV_rf","SV", "CHV", "CHV_nopca")
+image_types <- c("masked", "unmasked")
+years <- c('2016', '2024')
+
+
+tall_results_df <- data.frame(
+  year = integer(),
+  image_type = character(),
+  taxonomic_metric = character(),
+  spectral_metric = character(),
+  r2_marginal = numeric(),
+  r2_conditional = numeric(),
+  correlation_coefficient = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# loop through years, tax and spec metrics
+for (year in years) {
+  for (img_type in image_types) {
+    # filter data for year and image type
+    df_filtered <- tall_tax_and_spec_div_values %>%
+      filter(year == !!year, image_type == img_type)
+  
+    for (tax in taxonomic_metrics) {
+      for (spec in spectral_metrics) {
+        
+        # fit model
+        model <- try(glmmTMB(
+          formula = as.formula(paste(tax, "~ scale(", spec, ") + (1 | site)")),
+          data = df_filtered
+        ), silent = TRUE)
+        
+        # handle any errors in fitting the model
+        if (!inherits(model, "try-error")) {
+          # calculate R2 values using r2_nakagawa
+          r2_values <- r2_nakagawa(model)
+          
+          r2_marginal <- format(r2_values$R2_marginal, scientific = FALSE)
+          r2_conditional <- format(r2_values$R2_conditional, scientific = FALSE)
+          
+          # calculate Pearson correlation between observed and predicted values
+          predicted_values <- predict(model)
+          correlation_coefficient <- cor(df_filtered[[tax]], predicted_values, use = "complete.obs")
+          
+          # store the results
+          tall_results_df <- rbind(tall_results_df, data.frame(
+            year = year,
+            image_type = img_type,
+            taxonomic_metric = tax,
+            spectral_metric = spec,
+            r2_marginal = r2_marginal,
+            r2_conditional = r2_conditional,
+            correlation_coefficient = correlation_coefficient
+          ))
+        } else {
+          cat("Error fitting model for year:", year, ", image type:", img_type, 
+              ", tax metric:", tax, ", spectral metric:", spec, "\n")
+        }
+      }
+    }
+  }
+}
+
+# Check the results
+print(tall_results_df)
+
+write.csv(alive_results_df, 'data_out/alive_modelling_results.csv')
 
 
 

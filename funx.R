@@ -21,13 +21,13 @@ for (folder in folders) {
   tif_files <- list.files(folder_path, pattern = "\\.tif$", full.names = TRUE)
   
   # load as raster
-  rasters <- lapply(tif_files, raster)
+  rasters <- lapply(tif_files, terra::rast)
   
   # extract band names from file names
   band_names <- tools::file_path_sans_ext(basename(tif_files))
   
   # stack rasters and assign band names
-  combined_image <- stack(rasters)
+  combined_image <- terra::rast(rasters)
   names(combined_image) <- band_names
   
   # reorder the bands based on the desired band order
@@ -42,8 +42,8 @@ for (folder in folders) {
   # create output file as .tif and as .envi
   output_filename <- file.path(output_dir, paste0(folder, "_combined_image"))
   # write .tif file
- writeRaster(combined_image, filename = paste0(output_filename,'.tif'), format = "GTiff", options="INTERLEAVE=BAND", overwrite = TRUE)
-
+  terra::writeRaster(combined_image, filename = paste0(output_filename, '.tif'), 
+                     filetype = "GTiff", gdal = c("INTERLEAVE=BAND"), overwrite = TRUE)
   plot(combined_image)
 }
 }
@@ -180,7 +180,7 @@ extract_pixel_values <- function(raster_files, subplot_files, wavelength_names){
     
     # read in subplot file and select geometries
     subplots <- read_sf(subplot_file) %>% 
-      select('geometry')
+      dplyr::select('geometry')
     
     # apply subplot ids
     subplots$subplot_id <- unlist(lapply(1:5, function(i) paste(i, 1:5, sep="_")))
@@ -244,6 +244,40 @@ calculate_cv <- function(pixel_values_df, subplots, wavelengths) {
   return(cv)
 }
 
+#rarefraction cv function
+cv_rf <- function(pixel_values_df, # Dataframe with spectral reflectance values 
+                  subplots, # What you want to calculate spectral diversity for, here it's plots.
+                  wavelengths, # Cols where spectral reflectance values are
+                  n = 999, # Number of random resampling events, if rarefraction = T.
+                  min_points # minimum number of pixels (ie. the min # of pixels in any subplot)
+){ 
+  # convert to datatable (more efficient performance)
+  setDT(spectral_df)
+  
+  # create a list to store CV values for each replication
+  cv_list <- vector("list", n)
+  
+  # b) calculate CV for each resampling event
+  for (i in seq_len(n)) {
+    # sample to the minimum number of points per subplot
+    sampled_df <- spectral_df[, .SD[sample(.N, min_points)], by = areas_of_interest, .SDcols = wavelengths]
+    
+    # calculate CV for each wavelength within each subplot
+    cv_data <- sampled_df[, lapply(.SD, function(x) sd(x) / abs(mean(x, na.rm = TRUE))), by = areas_of_interest]
+    
+    # sum across wavelengths and normalize by the number of bands (ignoring NAs)
+    cv_data[, CV := rowSums(.SD, na.rm = TRUE) / (length(wavelengths) - rowSums(is.na(.SD))), .SDcols = wavelengths]
+    
+    # store cv values
+    cv_list[[i]] <- cv_data[, .(CV), by = areas_of_interest]
+  }
+  
+  # c) Collapse list of CV data tables into a single data table and calculate average CV for each area of interest
+  CV <- rbindlist(cv_list)[, .(CV = mean(CV, na.rm = TRUE)), by = areas_of_interest]
+  
+  return(CV)
+}
+
 # sv function
 calculate_sv <- function(pixel_values_df, subplots, wavelengths) {
   spectral_points <- pixel_values_df %>%
@@ -302,7 +336,7 @@ calculate_chv_for_subplots <- function(df, wavelengths, dim = 3, subplots = 'sub
       filter(subplot_id == subplot)
     
     if (rarefraction) {
-      # Resample CHV 999 times and calculate the mean
+      # Resample CHV n times and calculate the mean
       chv_values <- replicate(n, {
         resampled <- subplot_sample %>%
           select(-subplot_id) %>%
@@ -314,12 +348,12 @@ calculate_chv_for_subplots <- function(df, wavelengths, dim = 3, subplots = 'sub
       
       mean_chv <- mean(chv_values)
     } else {
-      # Calculate CHV without resampling
+      # calculate CHV without resampling
       chv_out <- calculate_chv(subplot_sample, dim = dim)
       mean_chv <- chv_out$vol
     }
     
-    # Store results
+    # store results
     results <- results %>%
       add_row(subplot_id = subplot, CHV = mean_chv)
   }
@@ -381,9 +415,12 @@ calculate_field_diversity <- function(survey_data){
   # list to store results for all lists
   all_site_results <- list()
   
-  # list to store community matrices- this is a temporary step, to check that community matrices are correct :)
+  # list to store community matrices - useful to check that community matrices are correct :)
   community_matrices <- list()
   
+  # list to store presence absense matrices
+  presence_absence_matrices <- list()
+
   # Loop through each unique site
   for (site in ausplot_sites) {
     # Filter data for the current site
@@ -460,14 +497,24 @@ calculate_field_diversity <- function(survey_data){
       count(subplot_id, standardised_name) %>%
       spread(standardised_name, n, fill = 0)
     
+    
     # remove unwanted column if it exists -- WHY DOES THIS COLUMN EXIST~!!!!>???>
  #   if ("V1" %in% colnames(community_matrix)) {
   #    community_matrix <- community_matrix %>% 
    #     dplyr::select(-V1)
   #  }
     
-    # store the community matrix in the list - this is good for checking
+    # store the community matrix  in the list
     community_matrices[[site]] <- community_matrix
+    
+    
+    # calculate presence-absence values
+    presence_absence_matrix <- site_survey_data %>%
+      group_by(subplot_id) %>%
+      summarise(presence_proportion = sum(!is.na(standardised_name)) / n()) 
+    
+    # store the presence-absence matrix
+    presence_absence_matrices[[site]] <- presence_absence_matrix
     
     # calculate diversity indices
     shannon_diversity <- diversity(community_matrix[, -1], index = "shannon")
@@ -477,6 +524,8 @@ calculate_field_diversity <- function(survey_data){
       mutate(shannon_diversity = shannon_diversity,
              simpson_diversity = simpson_diversity,
              pielou_evenness = shannon_diversity / log(species_richness),
+             exp_shannon = exp(shannon_diversity),
+             inv_simpson = 1 / (simpson_diversity),
              site = site)
     
     # store  result for  current site
@@ -486,6 +535,10 @@ calculate_field_diversity <- function(survey_data){
   # combine into one df
   final_results <- bind_rows(all_site_results, .id = "site")
   
-  return(list(final_results = final_results, community_matrices = community_matrices))
+  return(list(
+    final_results = final_results, 
+    community_matrices = community_matrices, 
+    presence_absence_matrices = presence_absence_matrices  
+  ))
 }
 

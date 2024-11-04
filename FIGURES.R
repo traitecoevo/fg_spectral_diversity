@@ -8,12 +8,59 @@ library(tools)
 library(tidyverse)
 library(sf)
 library(patchwork)
+install.packages('ggh4x')
+library(ggh4x)
+# TRY TIDY MODELS FOR YOUR MODEL!
 
 # main figure ------------------------------------------------------------
 
-tax_and_spec_div_values <- read.csv('data_out/tax_and_spec_diversity_values.csv')
 
 tax_and_spec_div_values <- read.csv('data_out/tax_and_spec_diversity_values.csv')
+
+
+df_long <- tax_and_spec_div_values %>%
+  pivot_longer(cols = c(species_richness, exp_shannon, inv_simpson, pielou_evenness),
+               names_to = "taxonomic_metric",
+               values_to = "taxonomic_value") %>%
+  pivot_longer(cols = c(CV, SV, log.CHV_nopca),
+               names_to = "spectral_metric",
+               values_to = "spectral_value") %>%
+  mutate(taxonomic_metric = factor(taxonomic_metric, levels = names(taxonomic_labels)))
+
+df_long$predicted_values <- NA
+
+for (year in unique(tax_and_spec_div_values$year)) {
+  for (img_type in unique(tax_and_spec_div_values$image_type)) {
+    # Filter for year and image type from the original data
+    df_filtered <- tax_and_spec_div_values %>%
+      filter(year == !!year, image_type == img_type)
+    
+    for (tax in unique(df_long$taxonomic_metric)) {
+      for (spec in unique(df_long$spectral_metric)) {
+        
+        # Fit the model for the specific tax and spectral metrics
+        model <- try(glmmTMB(
+          formula = as.formula(paste(tax, "~ scale(", spec, ") + (1 | site)")),
+          data = df_filtered
+        ), silent = TRUE)
+        
+        # Check if the model fitting was successful
+        if (!inherits(model, "try-error")) {
+          # Predict values using the model
+          predictions <- predict(model, newdata = df_filtered, type = "response")
+          
+          # Add predictions to the relevant rows in df_long
+          df_long$predicted_values[df_long$year == year & df_long$image_type == img_type & 
+                                     df_long$taxonomic_metric == tax & 
+                                     df_long$spectral_metric == spec & 
+                                     df_long$subplot_id %in% df_filtered$subplot_id & 
+                                     df_long$site %in% df_filtered$site] <- predictions
+        }
+      }
+    }
+  }
+}
+
 
 create_plots <- function(df) {
   # taxonomic labels in correct order
@@ -31,30 +78,45 @@ create_plots <- function(df) {
   )
   
   # pivot longer
-  df_long <- df %>%
-    pivot_longer(cols = c(species_richness, exp_shannon, inv_simpson, pielou_evenness),
-                 names_to = "taxonomic_metric",
-                 values_to = "taxonomic_value") %>%
-    pivot_longer(cols = c(CV, SV, log.CHV_nopca),
-                 names_to = "spectral_metric",
-                 values_to = "spectral_value") %>%
-    mutate(taxonomic_metric = factor(taxonomic_metric, levels = names(taxonomic_labels)))
+  #df_long <- df %>%
+  #  pivot_longer(cols = c(species_richness, exp_shannon, inv_simpson, pielou_evenness),
+  #               names_to = "taxonomic_metric",
+  #               values_to = "taxonomic_value") %>%
+  #  pivot_longer(cols = c(CV, SV, log.CHV_nopca),
+  #               names_to = "spectral_metric",
+  #               values_to = "spectral_value") %>%
+  #  mutate(taxonomic_metric = factor(taxonomic_metric, levels = names(taxonomic_labels)))
   
   spectral_range <- range(df_long$spectral_value, na.rm = TRUE)
   taxonomic_range <- range(df_long$taxonomic_value, na.rm = T)
+
+  results_df <- results_df %>% 
+    mutate(taxonomic_metric = factor(taxonomic_metric, levels = names(taxonomic_labels)))
   
   # 2024 plots
   unmasked_plot_24 <- df_long %>%
     filter(image_type == 'unmasked', year == 2024) %>%
     ggplot(aes(x = spectral_value, y = taxonomic_value, color = site)) +
     geom_point(alpha = 0.7, show.legend = F) +
-    geom_smooth(method = 'lm', se = FALSE, linetype = "solid", color = 'black') +
+    #geom_abline(aes(intercept = intercept, slope = beta), 
+    #            data = results_df %>% filter(year == 2024, image_type == 'unmasked'), 
+    #            color = "black", linewidth = 1) +
+    geom_line(aes(x = spectral_value, y = predicted_values), linetype = "solid", color = "black") + 
+    #geom_smooth(method = 'lm', se = FALSE, linetype = "solid", color = 'black') +
     facet_grid(taxonomic_metric ~ spectral_metric, scales = "free", labeller = labeller(spectral_metric = spectral_labels)) +
     labs(
       title = "Unmasked Rasters",
       y = '2024') +
     theme_minimal() +
     scale_color_manual(values = c('darkgreen', 'chocolate', 'navajowhite2', 'darkseagreen')) +
+    ggh4x::facetted_pos_scales(y = list(
+      taxonomic_metric == 'species_richness' ~ scale_y_continuous(breaks = c(5, 10, 15), limits = c(0, 20)),
+      taxonomic_metric == 'exp_shannon' ~ scale_y_continuous(breaks = c(5, 10, 15), limits = c(0.7, 16)),
+      taxonomic_metric == 'inv_simpson' ~ scale_y_continuous(breaks = c(4, 8, 12), limits = c(0, 12.5)),
+      taxonomic_metric == 'pielou_evenness' ~ scale_y_continuous(breaks = c(0.8, 0.9, 1), limits = c(0.65, 1)))) +
+    ggh4x::facetted_pos_scales(x = list(
+      spectral_metric == 'CV' ~ scale_x_continuous(breaks = c(0.2, 0.3, 0.4, 0.5))
+    )) +
     theme(plot.title = element_text(hjust = 0.5, size = 14),
           axis.text.x = element_text(angle = 90, hjust = 1, size = 12),
           panel.grid.major = element_blank(),
@@ -65,7 +127,8 @@ create_plots <- function(df) {
     filter(image_type == 'masked', year == 2024) %>%
     ggplot(aes(x = spectral_value, y = taxonomic_value, color = site)) +
     geom_point(alpha = 0.7) +
-    geom_smooth(method = 'lm', se = FALSE, linetype = "solid", color = 'black') +
+    #geom_line(aes(y = predicted_values), linetype = "solid", color = "black") + 
+    #geom_smooth(method = 'lm', se = FALSE, linetype = "solid", color = 'black') +
     facet_grid(taxonomic_metric ~ spectral_metric, scales = "free", labeller = labeller(taxonomic_metric = taxonomic_labels,
                                                                                         spectral_metric = spectral_labels)) +
     labs(
@@ -73,6 +136,14 @@ create_plots <- function(df) {
       color = 'Site') +
     theme_minimal() +
     scale_color_manual(values = c('darkgreen', 'chocolate', 'navajowhite2', 'darkseagreen')) +
+    ggh4x::facetted_pos_scales(y = list(
+      taxonomic_metric == 'species_richness' ~ scale_y_continuous(breaks = c(5, 10, 15), limits = c(0, 20)),
+      taxonomic_metric == 'exp_shannon' ~ scale_y_continuous(breaks = c(5, 10, 15), limits = c(0.7, 16)),
+      taxonomic_metric == 'inv_simpson' ~ scale_y_continuous(breaks = c(4, 8, 12), limits = c(0, 12.5)),
+      taxonomic_metric == 'pielou_evenness' ~ scale_y_continuous(breaks = c(0.8, 0.9, 1), limits = c(0.65, 1)))) +    
+    ggh4x::facetted_pos_scales(x = list(
+      spectral_metric == 'CV' ~ scale_x_continuous(breaks = c(0.2, 0.3, 0.4, 0.5))
+    )) +
     theme(plot.title = element_text(hjust = 0.5, size = 14),
           axis.text.x = element_text(angle = 90, hjust = 1, size = 12),
           strip.text.y = element_text(angle = 0, hjust = 1),
@@ -86,11 +157,20 @@ create_plots <- function(df) {
     filter(image_type == 'masked', year == 2016) %>%
     ggplot(aes(x = spectral_value, y = taxonomic_value, color = site)) +
     geom_point(show.legend = F, alpha = 0.7) +
-    geom_smooth(method = "lm", se = FALSE, linetype = "solid", color = 'black') +
+    #geom_line(aes(y = predicted_values), linetype = "solid", color = "black") + 
+    #geom_smooth(method = "lm", se = FALSE, linetype = "solid", color = 'black') +
     facet_grid(taxonomic_metric ~ spectral_metric, scales = "free", labeller = labeller(taxonomic_metric = taxonomic_labels,
                                                                                         spectral_metric = spectral_labels)) +
     theme_minimal() +
     scale_color_manual(values = c('darkgreen', 'darkseagreen')) +
+    ggh4x::facetted_pos_scales(y = list(
+      taxonomic_metric == 'species_richness' ~ scale_y_continuous(breaks = c(5, 10, 15), limits = c(0, 20)),
+      taxonomic_metric == 'exp_shannon' ~ scale_y_continuous(breaks = c(5, 10, 15), limits = c(0.7, 16)),
+      taxonomic_metric == 'inv_simpson' ~ scale_y_continuous(breaks = c(4, 8, 12), limits = c(0, 12.5)),
+      taxonomic_metric == 'pielou_evenness' ~ scale_y_continuous(breaks = c(0.8, 0.9, 1), limits = c(0.7, 1)))) +    
+    ggh4x::facetted_pos_scales(x = list(
+      spectral_metric == 'CV' ~ scale_x_continuous(breaks = c(0.2, 0.3, 0.4, 0.5))
+    )) +
     theme(plot.title = element_text(hjust = 0.5),
           axis.text.x = element_text(angle = 90, hjust = 1, size = 12),
           strip.text.y = element_text(angle = 0, hjust = 1),
@@ -103,12 +183,21 @@ create_plots <- function(df) {
     filter(image_type == 'unmasked', year == 2016) %>%
     ggplot(aes(x = spectral_value, y = taxonomic_value, color = site)) +
     geom_point(show.legend = F, alpha = 0.7) +
-    geom_smooth(method = "lm", se = FALSE, linetype = "solid", color = 'black') +
+    #geom_line(aes(y = predicted_values), linetype = "solid", color = "black") + 
+    #geom_smooth(method = "lm", se = FALSE, linetype = "solid", color = 'black') +
     facet_grid(taxonomic_metric ~ spectral_metric, scales = "free", labeller = labeller(spectral_metric = spectral_labels)) +
     labs(y = '2016') +
     theme_minimal() +
     scale_color_manual(values = c('darkgreen', 'darkseagreen')) +
-    theme(plot.title = element_text(hjust = 0.5),
+    ggh4x::facetted_pos_scales(y = list(
+      taxonomic_metric == 'species_richness' ~ scale_y_continuous(breaks = c(5, 10, 15), limits = c(0, 20)),
+      taxonomic_metric == 'exp_shannon' ~ scale_y_continuous(breaks = c(5, 10, 15), limits = c(0.7, 16)),
+      taxonomic_metric == 'inv_simpson' ~ scale_y_continuous(breaks = c(4, 8, 12), limits = c(0, 12.5)),
+      taxonomic_metric == 'pielou_evenness' ~ scale_y_continuous(breaks = c(0.8, 0.9, 1), limits = c(0.7, 1)))) +    
+    ggh4x::facetted_pos_scales(x = list(
+      spectral_metric == 'CV' ~ scale_x_continuous(breaks = c(0.2, 0.3, 0.4, 0.5))
+    )) +
+theme(plot.title = element_text(hjust = 0.5),
           axis.text.x = element_text(angle = 90, hjust = 1, size = 12),
           strip.text.y.right = element_blank(),
           panel.grid.major = element_blank(),
@@ -149,6 +238,9 @@ create_plots(tax_and_spec_div_values)
 create_plots(tall_tax_and_spec_diversity_values_24)
 create_plots(alive_tax_and_spec_div_values)
 create_plots(rs_tax_and_spec_div_values)
+
+
+
 
 
 ggsave('maps_graphs/main_fig.png', height = 8, width = 10, dpi = 600)
@@ -437,10 +529,10 @@ results_df %>%
        shape = 'Image type') +
   theme_minimal() +
   theme(panel.grid.minor = element_blank(),
-        text = element_text(size = 16),
-        legend.title = element_text(size = 14),
-        legend.text = element_text(size = 12),
-        strip.text = element_text(size = 14),
+        text = element_text(size = 100),
+        legend.title = element_text(size = 98),
+        legend.text = element_text(size = 96),
+        strip.text = element_text(size = 98),
         strip.text.y.right = element_text(face = 'bold')) +
         guides(color = 'none') 
 
@@ -548,12 +640,18 @@ library(sf)
 library(rnaturalearth)
 library(rnaturalearthhires)
 library(ggthemes)
-ausplots <- get_ausplots(veg.vouchers = T)
+ausplots <- get_ausplots(veg.vouchers = T, veg.PI = T)
 veg <- ausplots$veg.vouch
+veg.PI <- ausplots$veg.PI
 
 richness <- veg %>%
   group_by(site_unique) %>%
   summarise(count = n())
+
+richness_PI <- veg.PI %>%
+  group_by(site_unique) %>%
+  drop_na(herbarium_determination) %>%
+  summarise(count = n_distinct(herbarium_determination))
 
 locations <- ausplots$site.info %>%
   dplyr::select(site_unique, latitude, longitude) #%>%
@@ -575,28 +673,37 @@ aus <- ne_states(country = 'australia', returnclass = 'sf')
 
 fg_points$fowlers_gap <- 'Fowlers Gap'
 
-aus <- st_transform(aus, crs = 4326)
+aus <- st_transform(aus, crs = 3577)
 
 ausplot_richness <- ausplot_richness[order(ausplot_richness$count), ]
 
 library(showtext)
 font_add_google('Open Sans','open sans')
 font_add_google('Tahoma','tahoma')
+font_add_google('Roboto','roboto')
 showtext_auto()
+
+fg_points <- st_as_sf(fg_points, coords = c("longitude", "latitude"), crs = 4326)
+fg_points <- st_transform(fg_points, crs = 3577)
+
+ausplot_richness <- st_as_sf(ausplot_richness, coords = c("longitude", "latitude"), crs = 4326)
+ausplot_richness <- st_transform(ausplot_richness, crs = 3577)
+
 
 ggplot() +
   geom_sf(data = aus, fill = 'white', color = 'black') + 
-  geom_jitter(data = ausplot_richness, aes(x = longitude, y = latitude, color = count), alpha = 0.6, size = 3, height = 0.15, width = 0.15) +
-  geom_point(data = fg_points, aes(x = longitude, y = latitude, fill = fowlers_gap), color = 'red', shape = 0, size = 5, stroke = 1) + 
+  geom_sf(data = ausplot_richness, aes(color = count), alpha = 0.6, size = 3, height = 0.15, width = 0.15) +
+  geom_sf(data = fg_points, aes(fill = fowlers_gap), color = 'red', shape = 0, size = 5, stroke = 1) + 
   scale_color_viridis_c(option = 'H') +
-  ylim(-45, NA) + 
-  xlim(NA, 155) + 
   labs(color = 'species richness') +  
-  theme_minimal(base_family = 'tahoma') +
+  theme_minimal(base_family = 'roboto') +
   guides(fill = guide_legend(title = NULL)) +
-  theme(text = element_text(size = 46),
-        legend.title = element_text(margin = margin(b = 10)),
-        panel.grid = element_blank())
+  ylim(-5000000, -700000) +  # Adjust the limits for the projected system
+  xlim(-2050000, 2200000) + 
+  theme(text = element_text(size = 60),
+        legend.title = element_text(margin = margin(b = 15)),
+        panel.grid = element_blank()) +
+coord_sf(crs = 3577)
 
 ggsave('maps_graphs/map_of_ausplot_sites_with_richness.png', width = 10, height = 7, dpi = 300, bg = 'white')
 
